@@ -1,3 +1,5 @@
+github.com/Snipa22/go-tari-grpc-lib/v3 v3.2.0 h1:cuXLsW2tfvdMGDbu/mwjGvgcEAEO086908n05rW5RPE=
+github.com/Snipa22/go-tari-grpc-lib/v3 v3.2.0/go.mod h1:PhFhxISrJsqnix9QDy16YuxpbpPEcQzFkixNtJftSx8=
 github.com/go-logr/logr v1.4.2 h1:6pFjapn8bFcIbiKo3XT4j/BhANplGihG6tvd+8rYgrY=
 github.com/go-logr/logr v1.4.2/go.mod h1:9T104GzyrTigFIr8wt5mBrctHMim0Nb2HLGrmQ40KvY=
 github.com/go-logr/stdr v1.2.2 h1:hSWxHoqTgW2S2qGc0LTAI563KZ5YKYRhT3MFKZMbjag=

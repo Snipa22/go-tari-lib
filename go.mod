@@ -14,5 +14,3 @@ require (
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20250218202821-56aae31c358a // indirect
 	google.golang.org/protobuf v1.36.6 // indirect
 )
-
-replace github.com/Snipa22/go-tari-grpc-lib/v3 => ../go-tari-grpc-lib
