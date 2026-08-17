@@ -6,6 +6,8 @@ import (
 	"net"
 	"time"
 
+	"github.com/hashicorp/yamux"
+
 	rpcpkg "github.com/Snipa22/go-tari-lib/p2p/rpc"
 )
 
@@ -24,9 +26,24 @@ type ChainMetadataInfo struct {
 }
 
 // ProbeChainMetadata dials addr (host:port), performs the Noise_XX handshake (reusing
-// InitiatorHandshake, same pattern as Probe), then performs RPC-over-P2P protocol negotiation
-// (`t/blksync/1`), the RPC session handshake, and a single get_chain_metadata call (see
-// p2p/rpc), returning the peer's chain metadata.
+// InitiatorHandshake, same pattern as Probe), opens a Yamux-multiplexed substream on top of that
+// Noise session, and then performs RPC-over-P2P protocol negotiation (`t/blksync/1`), the RPC
+// session handshake, and a single get_chain_metadata call (see p2p/rpc) over that substream,
+// returning the peer's chain metadata.
+//
+// Real Tari nodes run protocol negotiation and RPC on a Yamux substream, not directly on the raw
+// post-handshake Noise session (source: tari/comms/core/src/multiplexing/yamux.rs +
+// tari/comms/core/src/connection_manager/peer_connection.rs) -- Yamux's own multiplexed byte
+// stream is carried as the plaintext payload of Noise transport frames, i.e. it sits ON TOP of
+// the encrypted Noise session, not instead of it. Wiring RPC-over-P2P directly onto
+// Session.SendFrame/ReceiveFrame (as an earlier version of this function did) produces a stream
+// that is missing this Yamux framing layer entirely, which real nodes reject/misparse (observed
+// against real Tari mainnet nodes as "rpc: negotiation frame declares protocol id length 0 but
+// 229 bytes follow the header" -- see p2p/VERIFICATION.md for the full writeup). See
+// newSessionReadWriteCloser (p2p/yamuxadapter.go) and rpc.NewStreamTransport
+// (p2p/rpc/streamtransport.go) for the two adapters that make this layering possible without
+// rewriting negotiation.go/handshake.go/chainmetadata.go/canonicalframe.go's own frame
+// encode/decode logic.
 //
 // Like Probe, this is a "poke and discard" single-shot client call -- no persistent connection
 // management, single call, closes the connection when done.
@@ -55,7 +72,25 @@ func ProbeChainMetadata(ctx context.Context, addr string) (*ChainMetadataInfo, e
 	}
 	defer session.Close()
 
-	metadata, err := rpcpkg.GetChainMetadata(ctx, session)
+	// Yamux multiplexes over the Noise session's own frame-oriented SendFrame/ReceiveFrame API
+	// (adapted to a plain io.ReadWriteCloser byte stream by sessionReadWriteCloser), NOT over the
+	// raw net.Conn -- Yamux's byte stream is the plaintext payload of Noise transport frames.
+	adapter := newSessionReadWriteCloser(session)
+	yamuxSession, err := yamux.Client(adapter, nil)
+	if err != nil {
+		return nil, fmt.Errorf("p2p: establishing Yamux client session with %s: %w", addr, err)
+	}
+	defer yamuxSession.Close()
+
+	stream, err := yamuxSession.Open()
+	if err != nil {
+		return nil, fmt.Errorf("p2p: opening Yamux substream to %s: %w", addr, err)
+	}
+	defer stream.Close()
+
+	transport := rpcpkg.NewStreamTransport(stream)
+
+	metadata, err := rpcpkg.GetChainMetadata(ctx, transport)
 	if err != nil {
 		return nil, fmt.Errorf("p2p: getting chain metadata from %s: %w", addr, err)
 	}

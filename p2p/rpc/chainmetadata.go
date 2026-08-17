@@ -49,6 +49,14 @@ func (e *RPCStatusError) Error() string {
 //  4. Receive+decode RpcResponse. Check status first: non-zero -> *RPCStatusError (payload not
 //     decoded in that case). Zero -> decode payload as ChainMetadata.
 //
+// Between steps 1 and 2, GetChainMetadata calls BeginCanonicalFraming(session): if session is a
+// streamTransport (i.e. this call is running over a raw byte-stream Yamux substream, via
+// NewStreamTransport -- see p2p.ProbeChainMetadata), this signals the transition from
+// negotiation-frame parsing to canonical-frame parsing on that shared substream (see
+// streamtransport.go's doc comments for why this signal is needed at all). It's a no-op for
+// Transport implementations that don't need it (e.g. this package's own tests operating directly
+// on a *p2p.Session).
+//
 // ctx is currently only checked for cancellation before starting (no per-step deadline plumbing
 // into Session.SendFrame/ReceiveFrame, which are synchronous blocking calls on the underlying
 // net.Conn -- callers that need a hard deadline should set one on the connection directly, e.g.
@@ -63,6 +71,7 @@ func GetChainMetadata(ctx context.Context, session Transport) (*pb.ChainMetadata
 	if err := NegotiateProtocol(session, BlockSyncProtocolID); err != nil {
 		return nil, fmt.Errorf("rpc: negotiating protocol %q: %w", BlockSyncProtocolID, err)
 	}
+	BeginCanonicalFraming(session)
 
 	if _, err := PerformSessionHandshake(session); err != nil {
 		return nil, fmt.Errorf("rpc: performing RPC session handshake: %w", err)

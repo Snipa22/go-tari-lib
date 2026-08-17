@@ -223,3 +223,188 @@ it is captured here and in the code's own doc comments.
   it introduces no new wire-format details of its own, so its correctness rests entirely on the
   two pieces it composes; it has no dedicated live-network test in this package's own suite for
   the same "no guaranteed reachable target" reason `Probe` itself doesn't.
+
+## Part C addendum (2026-08-17): fix -- RPC-over-P2P was missing the Yamux multiplexing layer
+
+### The bug (confirmed against 2 real Tari mainnet nodes)
+
+Everything documented in the "Part A/B addendum" section above was internally self-consistent
+(this package's own client talking to this package's own in-process fake responder), but was
+**wrong when run against real Tari mainnet nodes**. The failure, confirmed live against two
+separate real nodes:
+
+```
+rpc: negotiation frame declares protocol id length 0 but 229 bytes follow the header
+```
+
+i.e. `decodeNegotiationFrame` (`p2p/rpc/negotiation.go`) received a `ReceiveFrame()` payload
+whose first byte (the declared protocol-id length) was `0`, but which actually had 229 more
+bytes tacked on after that -- garbage from this client's point of view, but not actually garbage:
+it was the real node's own Yamux framing bytes, which this client had never established a Yamux
+session over and therefore could not parse.
+
+### Root cause
+
+Root cause, confirmed by fetching and reading the real Tari Rust source directly:
+
+- `comms/core/src/connection_manager/peer_connection.rs`: once the Noise_XX handshake completes,
+  every real Tari node immediately establishes a Yamux multiplexed session
+  (`yamux::Connection::new`) on top of the Noise transport, and ALL subsequent protocol
+  negotiation and RPC traffic runs on Yamux SUBSTREAMS opened over that session -- never directly
+  on the raw post-handshake Noise transport.
+- `comms/core/src/multiplexing/yamux.rs`: confirms the Yamux session is layered directly on top
+  of the (already-encrypted) Noise socket -- i.e. Yamux's own multiplexed byte stream is the
+  PLAINTEXT PAYLOAD of Noise transport frames, not a replacement for the Noise transport framing.
+
+This client's `p2p/rpc` package (protocol negotiation, the RPC session handshake, and
+`get_chain_metadata`) was wired directly onto `*p2p.Session`'s raw `SendFrame`/`ReceiveFrame`
+(one Noise transport frame per protocol message, no Yamux in between at all). Every wire-format
+detail listed as "byte-exact verified" in the Part A/B addendum above (negotiation frame layout,
+canonical frame layout, protobuf shapes, protocol id, method number, etc.) was and remains
+correct -- the bug was purely a missing intermediate layer, not an error in any of those
+primitives. A real node, expecting Yamux-framed bytes on the substream, saw this client's raw
+negotiation-frame bytes arrive as if they were Yamux protocol bytes (or vice versa, depending on
+which side's framing got desynced first), producing the nonsensical-looking length declaration
+above.
+
+### The fix
+
+Correct layering, now implemented:
+
+```
+Noise transport (u16 BE frames, p2p.Session.SendFrame/ReceiveFrame)
+  -> Yamux multiplexed connection/substream (github.com/hashicorp/yamux)
+    -> Canonical RPC framing (u32 BE length prefix, p2p/rpc/canonicalframe.go) INSIDE that substream
+      -> protobuf payloads
+```
+
+Concretely:
+
+- **`p2p/yamuxadapter.go`** (new): `sessionReadWriteCloser` adapts `*p2p.Session`'s frame-oriented
+  `SendFrame`/`ReceiveFrame` to the plain `io.ReadWriteCloser` interface `yamux.Client`/
+  `yamux.Server` require as their underlying transport -- one `Write` call becomes one
+  `SendFrame` call (one Noise transport frame), and `Read` drains/buffers across
+  `ReceiveFrame` calls as needed, since a caller's `Read` buffer (yamux's own internal reader, in
+  practice) is not guaranteed to be sized to match a whole Noise transport frame.
+- **`p2p/rpc/streamtransport.go`** (new): `streamTransport`/`NewStreamTransport` implement
+  `rpc.Transport` (`SendFrame`/`ReceiveFrame`, one complete message per call) directly on top of
+  a raw `io.ReadWriteCloser` byte stream -- i.e. a Yamux substream (a `net.Conn`).
+  - **Framing decision (corrected -- see "Correction" subsection immediately below for the
+    mistake this replaces):** `streamTransport` adds **ZERO extra framing of its own**. Both
+    message kinds that flow over it are already fully self-delimiting on their own, and
+    `SendFrame` writes whatever payload it's given straight to the stream, byte-for-byte,
+    unmodified:
+    - Protocol negotiation frames (`negotiation.go`'s `encodeNegotiationFrame`/
+      `decodeNegotiationFrame`): `[1-byte length][1-byte flags][protocol id, `length` bytes]`.
+      Confirmed byte-for-byte against real Tari's `comms/core/src/protocol/negotiation.rs`:
+      `write_frame_flush`/`read_frame` operate directly on the raw socket with no outer wrapper
+      around this 2-byte-header-plus-body message at all.
+    - Canonical RPC frames (`canonicalframe.go`'s `EncodeCanonicalFrame`/`DecodeCanonicalFrame`):
+      `[4-byte u32-BE length][payload, `length` bytes]`. This is already the exact wire format
+      `tokio_util`'s `LengthDelimitedCodec` (`framing::canonical`) produces directly on the
+      substream -- `EncodeCanonicalFrame`'s output is not a payload that then needs an outer
+      wrapper of its own; it already IS the complete on-the-wire message.
+
+    Since negotiation frames and canonical frames are not self-distinguishing from each other in
+    isolation (a canonical frame's first byte is not reliably a valid negotiation length, and
+    vice versa), and both kinds share this one substream sequentially (negotiate once, then
+    transition to RPC), `streamTransport.ReceiveFrame` needs to be told which kind to expect.
+    This is done via an explicit, exported `rpc.BeginCanonicalFraming(Transport)` call: before
+    it's called, `ReceiveFrame` parses negotiation frames (2-byte header); after it's called,
+    `ReceiveFrame` parses canonical frames (4-byte header) instead. `SendFrame` needs no such
+    switch, since it never adds framing of its own either way. `GetChainMetadata`
+    (`chainmetadata.go`) calls `BeginCanonicalFraming` internally, immediately after
+    `NegotiateProtocol` succeeds and before `PerformSessionHandshake` runs, so
+    `p2p.ProbeChainMetadata`'s outbound/client call site needs no changes of its own for this.
+    A Transport-over-a-shared-substream RESPONDER that drives `NegotiateProtocolInbound` and the
+    RPC session handshake directly (rather than through `GetChainMetadata`) must call
+    `BeginCanonicalFraming` itself at the equivalent point in its own sequence (see
+    `p2p/yamux_rpc_integration_test.go`'s `serveGetChainMetadataOverStream` for exactly this).
+    `BeginCanonicalFraming` is a documented no-op for any `Transport` implementation that doesn't
+    need this distinction (e.g. this package's own tests operating directly on a `*p2p.Session`,
+    where every message is already its own discrete Noise transport frame).
+
+  #### Correction (same day, 2026-08-17): an earlier version of this fix double-wrapped every message
+
+  The first version of `streamTransport` landed in this same pass wrapped BOTH negotiation
+  frames AND canonical frames in an *additional*, generic u32-BE length prefix on top of the
+  already-self-delimiting payload -- i.e. it treated `streamTransport` the way the Part A/B
+  addendum's original (pre-Yamux) canonical framing worked, applying one uniform wrapper to
+  everything crossing it. **This was wrong** and would have broken wire compatibility with real
+  nodes: real Tari's `negotiation.rs` never wraps a negotiation frame in anything, and canonical
+  framing (`tokio_util`'s `LengthDelimitedCodec`) already applies exactly one u32-BE length
+  prefix per RPC message directly on the substream -- adding a second one on top, as the first
+  version of this fix did, would have produced a stream a real node's own canonical/negotiation
+  parsers do not expect (double length-prefixing, not single). This was caught and corrected
+  before any live-node re-verification was attempted, based on a direct re-fetch/re-read of
+  `comms/core/src/protocol/negotiation.rs`'s `write_frame_flush`/`read_frame`, which confirmed
+  negotiation frames are written/read directly on the raw socket with no wrapper of any kind.
+  The corrected design (no extra framing anywhere, explicit negotiation/canonical mode switch via
+  `BeginCanonicalFraming`) is what's described above and is what actually shipped in this fix;
+  the double-wrapping version never reached a commit describing itself as final/verified.
+- **`p2p/chainmetadata_probe.go`** (`ProbeChainMetadata`, updated): after
+  `InitiatorHandshake` succeeds, wraps the resulting `*Session` with `sessionReadWriteCloser`,
+  establishes a `yamux.Client` session over that adapter, opens one substream
+  (`yamuxSession.Open()`), wraps that substream with `rpc.NewStreamTransport`, and runs
+  negotiation + the RPC session handshake + `get_chain_metadata` all on that one substream, in
+  that order -- matching real Tari's own "negotiate then immediately transition to RPC on the
+  same already-open substream" behaviour for a single-call client like this one (no need for
+  multiple substreams here).
+- `p2p/rpc/negotiation.go`, `p2p/rpc/handshake.go`, `p2p/rpc/canonicalframe.go`, and the
+  `Transport` interface's method signatures themselves (`p2p/rpc/transport.go`) are
+  **unchanged**. `p2p/rpc/chainmetadata.go` has exactly one small addition: a
+  `BeginCanonicalFraming(session)` call inserted between the existing `NegotiateProtocol` and
+  `PerformSessionHandshake` calls (see the `streamTransport` framing-decision bullet above for
+  why) -- `GetChainMetadata`'s signature, and every other line of its own request/response
+  encode/decode logic, are otherwise unchanged. This was, and remains, intended purely as "wire
+  the existing, correct frame-encoding logic onto the correct underlying stream (plus the one
+  minimal phase-transition signal that layering requires)" -- not a rewrite of any of these
+  files' own payload encode/decode logic.
+
+### Testing added for this fix
+
+- **`p2p/rpc/streamtransport_test.go`** (new, package `rpc`, internal test since it needs
+  unexported helpers like `encodeNegotiationFrame`/`decodeNegotiationFrame` for round-trip
+  assertions): unit tests for `streamTransport` in isolation, over a real `net.Pipe()` (no Yamux,
+  no Noise involved -- just the raw framing logic). Covers: `SendFrame` writes payload to the
+  wire completely unmodified (byte-for-byte, no extra length prefix of any kind); `ReceiveFrame`
+  correctly parses a negotiation frame written raw to the pipe (default/pre-
+  `BeginCanonicalFraming` mode); `ReceiveFrame` correctly parses a canonical frame written raw to
+  the pipe after `BeginCanonicalFraming` is called; `BeginCanonicalFraming` is a safe no-op for a
+  `Transport` implementation that doesn't implement the internal switch; and a full negotiation-
+  then-canonical round trip sharing one `net.Pipe()` sequentially, with `BeginCanonicalFraming`
+  called on both ends in between, matching exactly the client/responder sequencing
+  `GetChainMetadata`/`serveGetChainMetadataOverStream` use.
+- **`p2p/yamuxadapter_test.go`** (new, package `p2p`, internal test since it needs the
+  unexported `sessionReadWriteCloser`/`newSessionReadWriteCloser`): unit tests for the adapter in
+  isolation, over a real Noise-handshaked `net.Pipe()` `*Session` pair (no Yamux involved) --
+  `Write` round-trips a payload as a single `SendFrame` call; `Read` with a buffer exactly the
+  size of one frame drains it in one call; `Read` with a buffer smaller than one frame requires
+  multiple calls and correctly preserves/drains the leftover bytes across them; `Read` correctly
+  moves on to a second frame after draining the first; `Close` closes the underlying `Session`.
+- **`p2p/yamux_rpc_integration_test.go`** (new, package `p2p`,
+  `TestGetChainMetadataOverRealYamuxSubstream`): the end-to-end test that actually would have
+  caught this bug. Unlike `p2p/rpc/rpc_test.go`'s existing in-process tests (client and fake
+  responder talking this package's protocol directly over the raw Noise session -- the exact
+  layering bug this fix corrects, which is precisely why those tests did not catch it), this test
+  runs a REAL `github.com/hashicorp/yamux` `Client`/`Server` session on top of a
+  `net.Pipe()`-backed Noise `Session` pair, opens/accepts one real Yamux substream on each side,
+  and only then runs protocol negotiation + the RPC session handshake + `get_chain_metadata` over
+  that substream via `rpc.NewStreamTransport` -- i.e. it exercises the exact same
+  Noise-Session -> `sessionReadWriteCloser` -> `yamux.Client`/`Open` -> `rpc.NewStreamTransport`
+  -> `rpc.GetChainMetadata` call chain that `p2p.ProbeChainMetadata` now uses against a real node.
+  Its fake responder helper, `serveGetChainMetadataOverStream`, calls `rpc.BeginCanonicalFraming`
+  itself (mirroring what `GetChainMetadata` does internally on the client side), since it drives
+  `NegotiateProtocolInbound`/`PerformSessionHandshakeResponder` directly rather than through
+  `GetChainMetadata`.
+
+  **This Yamux integration is Go-only, internally consistent (proven by this test's real,
+  successful Yamux client+fake-responder round trip), and is explicitly NOT independently
+  verified against real Tari Rust `yamux` wire behaviour** -- both ends of this test are this
+  package's own Go code, not a real Tari Rust node. `github.com/hashicorp/yamux` is a widely used,
+  separately-maintained implementation of the (roughly, and per its own `spec.md`) same Yamux
+  protocol real Tari's Rust `yamux` crate implements, but "both implementations claim to speak
+  the same spec" is not the same guarantee as "verified byte-compatible against each other over
+  the wire." **Live-node re-verification of this fix is required before it can be considered
+  final** -- that determination belongs to the dispatching agent, after re-testing against the
+  same real Tari mainnet nodes that originally surfaced this bug, not to this pass.
