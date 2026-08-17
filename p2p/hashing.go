@@ -45,7 +45,7 @@ func NewDomainSeparatedHasher(domain string, version uint64, label string) *Doma
 		panic(fmt.Sprintf("p2p: blake2b.New256(nil) unexpectedly failed: %v", err))
 	}
 	h := &DomainSeparatedHasher{digest: digest}
-	h.writeLengthPrefixed([]byte(domainSeparationTag(domain, version, label)))
+	writeLengthPrefixedTo(h.digest, []byte(domainSeparationTag(domain, version, label)))
 	return h
 }
 
@@ -61,7 +61,7 @@ func domainSeparationTag(domain string, version uint64, label string) string {
 // Chain feeds a length-prefixed chunk of data into the hasher and returns the hasher for
 // chaining, equivalent to Rust's `DomainSeparatedHasher::chain`/`digest::Update::chain`.
 func (h *DomainSeparatedHasher) Chain(data []byte) *DomainSeparatedHasher {
-	h.writeLengthPrefixed(data)
+	writeLengthPrefixedTo(h.digest, data)
 	return h
 }
 
@@ -73,14 +73,58 @@ func (h *DomainSeparatedHasher) Finalize() [32]byte {
 	return out
 }
 
-// writeLengthPrefixed writes `u64_LE(len(data))` followed by `data` into the underlying digest.
-// hash.Hash.Write never returns an error (per the stdlib hash.Hash contract), so errors are
-// deliberately not propagated here.
-func (h *DomainSeparatedHasher) writeLengthPrefixed(data []byte) {
+// writeLengthPrefixedTo writes `u64_LE(len(data))` followed by `data` into digest. hash.Hash.
+// Write never returns an error (per the stdlib hash.Hash contract), so errors are deliberately
+// not propagated here. Factored out of DomainSeparatedHasher so DomainSeparatedHasher512 (below)
+// can share the exact same tag-building/length-prefix-framing logic instead of duplicating it
+// and risking the two variants drifting apart.
+func writeLengthPrefixedTo(digest hash.Hash, data []byte) {
 	var lenBuf [8]byte
 	binary.LittleEndian.PutUint64(lenBuf[:], uint64(len(data)))
-	_, _ = h.digest.Write(lenBuf[:])
-	_, _ = h.digest.Write(data)
+	_, _ = digest.Write(lenBuf[:])
+	_, _ = digest.Write(data)
+}
+
+// DomainSeparatedHasher512 is the `Blake2b<U64>` (Blake2b-512, 64-byte digest) counterpart to
+// DomainSeparatedHasher (`Blake2b<U32>`, 32-byte digest). Tari's `IdentitySignature::
+// construct_challenge` (source: tari/comms/core/src/peer_manager/identity_signature.rs) is the
+// only user of this variant in this package: it needs a 64-byte "uniform bytes" digest to feed
+// into Ristretto255 scalar wide/uniform reduction (`Scalar::from_uniform_bytes`/this repo's
+// `ristretto255.Scalar.SetUniformBytes`, which requires exactly 64 bytes of input), not the
+// 32-byte digest the Noise DH KDF uses. Shares the exact same tag-building
+// (domainSeparationTag) and length-prefix-chaining (writeLengthPrefixedTo) logic as
+// DomainSeparatedHasher above -- only the underlying digest algorithm/output size differs.
+type DomainSeparatedHasher512 struct {
+	digest hash.Hash
+}
+
+// NewDomainSeparatedHasher512 starts a new domain-separated Blake2b-512 hash construction,
+// equivalent to `DomainSeparatedHasher::<Blake2b<U64>, M>::new_with_label(label)`.
+func NewDomainSeparatedHasher512(domain string, version uint64, label string) *DomainSeparatedHasher512 {
+	// blake2b.New512(nil) only ever errors if given a key/config longer than the digest allows;
+	// with a nil key that can never happen, so the error is deliberately not surfaced here,
+	// mirroring NewDomainSeparatedHasher above.
+	digest, err := blake2b.New512(nil)
+	if err != nil {
+		panic(fmt.Sprintf("p2p: blake2b.New512(nil) unexpectedly failed: %v", err))
+	}
+	h := &DomainSeparatedHasher512{digest: digest}
+	writeLengthPrefixedTo(h.digest, []byte(domainSeparationTag(domain, version, label)))
+	return h
+}
+
+// Chain feeds a length-prefixed chunk of data into the hasher and returns the hasher for
+// chaining, matching DomainSeparatedHasher.Chain.
+func (h *DomainSeparatedHasher512) Chain(data []byte) *DomainSeparatedHasher512 {
+	writeLengthPrefixedTo(h.digest, data)
+	return h
+}
+
+// Finalize returns the 64-byte Blake2b-512 digest, with no further framing.
+func (h *DomainSeparatedHasher512) Finalize() [64]byte {
+	var out [64]byte
+	h.digest.Sum(out[:0])
+	return out
 }
 
 // CommsCoreHashDomain is the domain separation tag used by Tari's comms/core crate for all
@@ -106,6 +150,33 @@ const noiseDHKDFLabel = "noise.dh"
 // label, i.e. `DomainSeparatedHasher::<Blake2b<U32>, CommsCoreHashDomain>::new_with_label(label)`.
 func newCommsCoreHasher(label string) *DomainSeparatedHasher {
 	return NewDomainSeparatedHasher(CommsCoreHashDomainName, CommsCoreHashDomainVersion, label)
+}
+
+// CommsCorePeerManagerDomain is the domain separation tag used by Tari's comms/core crate for
+// peer-manager-related signing, currently just the identity signature challenge (source:
+// `tari/comms/core/src/peer_manager/hashing.rs`):
+//
+//	hash_domain!(CommsCorePeerManagerDomain, "com.tari.comms.core.peer_manager", 1);
+//
+// Note this is version 1 (explicit 3-arg macro form), NOT version 0 like CommsCoreHashDomain
+// above -- a different hash_domain! invocation in a different Rust source file, with its own
+// independently-chosen version number; don't assume the two domains share a version just because
+// they share a "com.tari.comms.core" prefix.
+const (
+	CommsCorePeerManagerDomainName    = "com.tari.comms.core.peer_manager"
+	CommsCorePeerManagerDomainVersion = 1
+)
+
+// identitySignatureLabel is `IDENTITY_SIGNATURE` (source:
+// `tari/comms/core/src/peer_manager/hashing.rs`), the label used when hashing an identity
+// signature's challenge.
+const identitySignatureLabel = "identity_signature"
+
+// newCommsCorePeerManagerHasher512 starts a DomainSeparatedHasher512 scoped to
+// CommsCorePeerManagerDomain with the given label, i.e.
+// `DomainSeparatedHasher::<Blake2b<U64>, CommsCorePeerManagerDomain>::new_with_label(label)`.
+func newCommsCorePeerManagerHasher512(label string) *DomainSeparatedHasher512 {
+	return NewDomainSeparatedHasher512(CommsCorePeerManagerDomainName, CommsCorePeerManagerDomainVersion, label)
 }
 
 // noiseDHKDF is the domain-separated Blake2b-256 KDF Tari applies to a raw Ristretto255

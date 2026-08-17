@@ -103,10 +103,11 @@ func InitiatorHandshake(ctx context.Context, conn net.Conn, staticKeypair noise.
 	}
 
 	return &Session{
-		conn:          conn,
-		tx:            cs1,
-		rx:            cs2,
-		PeerStaticKey: append([]byte(nil), peerStatic...),
+		conn:               conn,
+		tx:                 cs1,
+		rx:                 cs2,
+		PeerStaticKey:      append([]byte(nil), peerStatic...),
+		LocalStaticKeypair: staticKeypair,
 	}, nil
 }
 
@@ -181,10 +182,11 @@ func ResponderHandshake(ctx context.Context, conn net.Conn, staticKeypair noise.
 	}
 
 	return &Session{
-		conn:          conn,
-		tx:            cs2,
-		rx:            cs1,
-		PeerStaticKey: append([]byte(nil), peerStatic...),
+		conn:               conn,
+		tx:                 cs2,
+		rx:                 cs1,
+		PeerStaticKey:      append([]byte(nil), peerStatic...),
+		LocalStaticKeypair: staticKeypair,
 	}, nil
 }
 
