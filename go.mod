@@ -8,6 +8,7 @@ require (
 	github.com/Snipa22/go-tari-grpc-lib/v3 v3.2.0
 	github.com/flynn/noise v1.1.0
 	github.com/gtank/ristretto255 v0.2.0
+	github.com/hashicorp/yamux v0.1.2
 	golang.org/x/crypto v0.44.0
 	golang.org/x/net v0.46.0
 	google.golang.org/grpc v1.72.0
