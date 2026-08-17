@@ -1,0 +1,23 @@
+// Vendored verbatim (field names, numbers and types) from Tari's
+// `tari/base_layer/core/src/base_node/proto/chain_metadata.proto`
+// (github.com/tari-project/tari, `development` branch), as transcribed in
+// p2p/RPC_TOR_SPEC.md section A3. Package name and message shapes are exact; only the
+// go_package option below is specific to this repo's generated-code layout.
+//
+// Note: the real upstream file also has an unused `import "google/protobuf/wrappers.proto";`
+// with no actual wrapper-typed field left in the message body -- that import is omitted here
+// since it's dead in the real file too (every field below is a plain scalar/bytes type).
+syntax = "proto3";
+
+package tari.base_node;
+
+option go_package = "github.com/Snipa22/go-tari-lib/p2p/proto";
+
+message ChainMetadata {
+    uint64 best_block_height = 1;
+    bytes best_block_hash = 2;
+    bytes accumulated_difficulty_low = 5;
+    bytes accumulated_difficulty_high = 8;
+    uint64 pruned_height = 6;
+    uint64 timestamp = 7;
+}
