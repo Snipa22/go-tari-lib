@@ -3,7 +3,6 @@ package p2p
 import (
 	"context"
 	"fmt"
-	"net"
 	"time"
 
 	"github.com/hashicorp/yamux"
@@ -25,11 +24,22 @@ type ChainMetadataInfo struct {
 	Latency time.Duration
 }
 
-// ProbeChainMetadata dials addr (host:port), performs the Noise_XX handshake (reusing
-// InitiatorHandshake, same pattern as Probe), opens a Yamux-multiplexed substream on top of that
-// Noise session, and then performs RPC-over-P2P protocol negotiation (`t/blksync/1`), the RPC
-// session handshake, and a single get_chain_metadata call (see p2p/rpc) over that substream,
-// returning the peer's chain metadata.
+// ProbeChainMetadata is a thin wrapper around
+// ProbeChainMetadataWithOptions(ctx, addr, ProbeOptions{}) -- its exact existing signature and
+// zero-config behavior (always dial directly, no SOCKS proxy) is unchanged; see
+// ProbeChainMetadataWithOptions for `.onion`/SOCKS5 support (dialForProbe in p2p/socks.go).
+func ProbeChainMetadata(ctx context.Context, addr string) (*ChainMetadataInfo, error) {
+	return ProbeChainMetadataWithOptions(ctx, addr, ProbeOptions{})
+}
+
+// ProbeChainMetadataWithOptions dials addr (host:port), performs the Noise_XX handshake (reusing
+// InitiatorHandshake, same pattern as Probe/ProbeWithOptions), opens a Yamux-multiplexed
+// substream on top of that Noise session, and then performs RPC-over-P2P protocol negotiation
+// (`t/blksync/1`), the RPC session handshake, and a single get_chain_metadata call (see p2p/rpc)
+// over that substream, returning the peer's chain metadata. Like ProbeWithOptions, opts
+// currently only configures SOCKS5 dialing for `.onion` addresses (see ProbeOptions and
+// dialForProbe in socks.go); with the zero value of ProbeOptions, ProbeChainMetadataWithOptions
+// behaves identically to ProbeChainMetadata.
 //
 // Real Tari nodes run protocol negotiation and RPC on a Yamux substream, not directly on the raw
 // post-handshake Noise session (source: tari/comms/core/src/multiplexing/yamux.rs +
@@ -47,7 +57,7 @@ type ChainMetadataInfo struct {
 //
 // Like Probe, this is a "poke and discard" single-shot client call -- no persistent connection
 // management, single call, closes the connection when done.
-func ProbeChainMetadata(ctx context.Context, addr string) (*ChainMetadataInfo, error) {
+func ProbeChainMetadataWithOptions(ctx context.Context, addr string, opts ProbeOptions) (*ChainMetadataInfo, error) {
 	start := time.Now()
 
 	staticKeypair, err := GenerateRistrettoKeypair()
@@ -55,8 +65,7 @@ func ProbeChainMetadata(ctx context.Context, addr string) (*ChainMetadataInfo, e
 		return nil, fmt.Errorf("p2p: generating ephemeral static keypair for chain metadata probe: %w", err)
 	}
 
-	dialer := net.Dialer{}
-	conn, err := dialer.DialContext(ctx, "tcp", addr)
+	conn, err := dialForProbe(ctx, addr, opts)
 	if err != nil {
 		return nil, fmt.Errorf("p2p: dialing %s: %w", addr, err)
 	}

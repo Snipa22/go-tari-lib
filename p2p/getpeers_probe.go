@@ -3,7 +3,6 @@ package p2p
 import (
 	"context"
 	"fmt"
-	"net"
 
 	"github.com/hashicorp/yamux"
 
@@ -29,15 +28,26 @@ func DefaultGetPeersRequest() rpcpkg.GetPeersRequest {
 	}
 }
 
-// ProbeGetPeers dials addr (host:port), performs the Noise_XX handshake and identity exchange
-// (reusing InitiatorHandshake/ExchangeIdentity, same pattern as ProbeChainMetadata), opens a
-// Yamux-multiplexed substream on top of that Noise session, and then performs RPC-over-P2P
-// protocol negotiation (`t/dht/1`), the RPC session handshake, and a single streaming get_peers
-// call (see p2p/rpc.GetPeers) over that substream, returning the peer's reported peer list.
+// ProbeGetPeers is a thin wrapper around
+// ProbeGetPeersWithOptions(ctx, addr, req, ProbeOptions{}) -- its exact existing signature and
+// zero-config behavior (always dial directly, no SOCKS proxy) is unchanged; see
+// ProbeGetPeersWithOptions for `.onion`/SOCKS5 support (dialForProbe in p2p/socks.go).
+func ProbeGetPeers(ctx context.Context, addr string, req rpcpkg.GetPeersRequest) ([]*pb.PeerInfo, error) {
+	return ProbeGetPeersWithOptions(ctx, addr, req, ProbeOptions{})
+}
+
+// ProbeGetPeersWithOptions dials addr (host:port), performs the Noise_XX handshake and identity
+// exchange (reusing InitiatorHandshake/ExchangeIdentity, same pattern as
+// ProbeChainMetadataWithOptions), opens a Yamux-multiplexed substream on top of that Noise
+// session, and then performs RPC-over-P2P protocol negotiation (`t/dht/1`), the RPC session
+// handshake, and a single streaming get_peers call (see p2p/rpc.GetPeers) over that substream,
+// returning the peer's reported peer list. Like ProbeWithOptions, opts currently only configures
+// SOCKS5 dialing for `.onion` addresses (see ProbeOptions and dialForProbe in socks.go); with the
+// zero value of ProbeOptions, ProbeGetPeersWithOptions behaves identically to ProbeGetPeers.
 //
-// This mirrors p2p/chainmetadata_probe.go's ProbeChainMetadata structure exactly (dial ->
-// InitiatorHandshake -> ExchangeIdentity -> Yamux client + Open -> NewStreamTransport -> the
-// package rpc call) -- see that file's doc comment for why each of those steps is required
+// This mirrors p2p/chainmetadata_probe.go's ProbeChainMetadataWithOptions structure exactly
+// (dial -> InitiatorHandshake -> ExchangeIdentity -> Yamux client + Open -> NewStreamTransport ->
+// the package rpc call) -- see that file's doc comment for why each of those steps is required
 // (Yamux multiplexing layer + identity exchange ordering, both confirmed against real Tari
 // mainnet nodes for get_chain_metadata; see p2p/VERIFICATION.md's Part C/D addenda). This
 // function has NOT itself been re-verified against a real Tari mainnet node -- see
@@ -46,14 +56,13 @@ func DefaultGetPeersRequest() rpcpkg.GetPeersRequest {
 // Unlike ChainMetadataInfo, this returns the generated protobuf []*pb.PeerInfo type directly
 // rather than a hand-flattened struct: PeerInfo's nested claims/addresses/identity-signature
 // shape isn't worth flattening for a v1 of this call.
-func ProbeGetPeers(ctx context.Context, addr string, req rpcpkg.GetPeersRequest) ([]*pb.PeerInfo, error) {
+func ProbeGetPeersWithOptions(ctx context.Context, addr string, req rpcpkg.GetPeersRequest, opts ProbeOptions) ([]*pb.PeerInfo, error) {
 	staticKeypair, err := GenerateRistrettoKeypair()
 	if err != nil {
 		return nil, fmt.Errorf("p2p: generating ephemeral static keypair for get_peers probe: %w", err)
 	}
 
-	dialer := net.Dialer{}
-	conn, err := dialer.DialContext(ctx, "tcp", addr)
+	conn, err := dialForProbe(ctx, addr, opts)
 	if err != nil {
 		return nil, fmt.Errorf("p2p: dialing %s: %w", addr, err)
 	}
@@ -69,9 +78,10 @@ func ProbeGetPeers(ctx context.Context, addr string, req rpcpkg.GetPeersRequest)
 	}
 	defer session.Close()
 
-	// Identity exchange must happen before the Yamux upgrade -- see ProbeChainMetadata's doc
-	// comment (p2p/chainmetadata_probe.go) and p2p/VERIFICATION.md's Part D addendum for the full
-	// explanation and the real-node bug this order fixed for get_chain_metadata.
+	// Identity exchange must happen before the Yamux upgrade -- see
+	// ProbeChainMetadataWithOptions's doc comment (p2p/chainmetadata_probe.go) and
+	// p2p/VERIFICATION.md's Part D addendum for the full explanation and the real-node bug this
+	// order fixed for get_chain_metadata.
 	if _, err := session.ExchangeIdentity(ctx); err != nil {
 		return nil, fmt.Errorf("p2p: exchanging identity with %s: %w", addr, err)
 	}
