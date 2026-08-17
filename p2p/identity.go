@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/flynn/noise"
 	googleproto "google.golang.org/protobuf/proto"
 
 	identitypb "github.com/Snipa22/go-tari-lib/p2p/proto"
@@ -58,16 +59,28 @@ type PeerInfo struct {
 
 // ourPeerIdentityMsgBytes builds and marshals this client's outgoing PeerIdentityMsg
 // (P2P_SPEC.md section 6): empty addresses, features=0, empty supported_protocols,
-// user_agent="go-tari-lib-p2p-probe/0.1", and no identity_signature (deliberately omitted -- see
-// the package-level doc comment in probe.go for why this is a deliberate simplification, not an
-// oversight).
-func ourPeerIdentityMsgBytes() ([]byte, error) {
+// user_agent="go-tari-lib-p2p-probe/0.1", and a real IdentitySignature signed with
+// staticKeypair (our own long-term Ristretto255 identity keypair -- the same one used for the
+// Noise_XX handshake; see identity_signature.go for the signing algorithm).
+//
+// An earlier version of this function sent no IdentitySignature at all. Real Tari nodes validate
+// every inbound PeerIdentityMsg (tari/comms/core/src/connection_manager/common.rs,
+// `validate_peer_identity_message`) and reject one with no signature
+// (`PeerManagerError::MissingIdentitySignature`), aborting the connection immediately after
+// identity exchange -- before any Yamux traffic. That was a live-network-confirmed bug, not a
+// deliberate simplification; see p2p/VERIFICATION.md's "Part D addendum" for the full writeup.
+func ourPeerIdentityMsgBytes(staticKeypair noise.DHKey) ([]byte, error) {
+	sig, err := buildOurIdentitySignature(staticKeypair)
+	if err != nil {
+		return nil, fmt.Errorf("p2p: building our own identity signature: %w", err)
+	}
+
 	msg := &identitypb.PeerIdentityMsg{
 		Addresses:          nil,
 		Features:           0,
 		SupportedProtocols: nil,
 		UserAgent:          outgoingUserAgent,
-		IdentitySignature:  nil,
+		IdentitySignature:  sig,
 	}
 	b, err := googleproto.Marshal(msg)
 	if err != nil {

@@ -21,6 +21,14 @@ type Session struct {
 	// PeerStaticKey is the peer's 32-byte canonical Ristretto255 static public key, recovered
 	// via HandshakeState.PeerStatic() once the handshake completed.
 	PeerStaticKey []byte
+
+	// LocalStaticKeypair is OUR OWN long-term Ristretto255 identity keypair -- the same
+	// staticKeypair passed into InitiatorHandshake/ResponderHandshake, threaded through so
+	// ExchangeIdentity can sign our own outgoing PeerIdentityMsg with it (see
+	// identity_signature.go). This is deliberately a plain field, not a method, since both
+	// handshake constructors already have the keypair in hand and there is nothing to compute
+	// lazily.
+	LocalStaticKeypair noise.DHKey
 }
 
 // Close closes the underlying connection.
@@ -89,7 +97,7 @@ func (s *Session) ExchangeIdentity(ctx context.Context) (*PeerInfo, error) {
 		defer cancel()
 	}
 
-	ourMsgBytes, err := ourPeerIdentityMsgBytes()
+	ourMsgBytes, err := ourPeerIdentityMsgBytes(s.LocalStaticKeypair)
 	if err != nil {
 		return nil, err
 	}

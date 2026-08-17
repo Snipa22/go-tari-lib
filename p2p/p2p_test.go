@@ -153,8 +153,24 @@ func TestInitiatorResponderNoiseXXAndIdentityExchange(t *testing.T) {
 	if len(initiatorIdentity.info.SupportedProtocols) != 0 {
 		t.Errorf("initiator received non-empty supported_protocols from responder: %v", initiatorIdentity.info.SupportedProtocols)
 	}
-	if initiatorIdentity.info.IdentitySignature != nil {
-		t.Errorf("initiator received an identity_signature from responder, expected nil (we don't send one)")
+	// Both sides now send a real IdentitySignature (see identity_signature.go) -- assert its
+	// shape (32-byte canonical scalar Signature, 32-byte canonical point PublicNonce, version 0,
+	// a recent UpdatedAt), rather than asserting it's nil the way this test used to (back when
+	// ourPeerIdentityMsgBytes deliberately sent none).
+	if initiatorIdentity.info.IdentitySignature == nil {
+		t.Fatalf("initiator received no identity_signature from responder, expected a real one")
+	}
+	if got := initiatorIdentity.info.IdentitySignature.Version; got != 0 {
+		t.Errorf("initiator received identity_signature with version %d, want 0", got)
+	}
+	if got := len(initiatorIdentity.info.IdentitySignature.Signature); got != 32 {
+		t.Errorf("initiator received identity_signature.Signature of %d bytes, want 32", got)
+	}
+	if got := len(initiatorIdentity.info.IdentitySignature.PublicNonce); got != 32 {
+		t.Errorf("initiator received identity_signature.PublicNonce of %d bytes, want 32", got)
+	}
+	if age := time.Since(time.Unix(initiatorIdentity.info.IdentitySignature.UpdatedAt, 0)); age < 0 || age > time.Minute {
+		t.Errorf("initiator received identity_signature.UpdatedAt too far from now: age %s", age)
 	}
 	if !initiatorIdentity.info.Reachable {
 		t.Errorf("initiator's PeerInfo.Reachable should be true after a successful exchange")
