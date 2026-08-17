@@ -694,3 +694,78 @@ metadata only -- no field/API change).
   failure of this pass, if at least one more real bug (e.g. in FIN-detection edge cases, response
   ordering, or streaming backpressure/deadline behavior against a real node's actual timing) only
   surfaces once this is tested live.
+
+## Part F addendum (2026-08-17): ProbeOptions-aware ProbeChainMetadataWithOptions/ProbeGetPeersWithOptions
+
+This section documents a small, additive-only capability: `ProbeChainMetadata`
+(`p2p/chainmetadata_probe.go`) and `ProbeGetPeers` (`p2p/getpeers_probe.go`) -- the two
+functions go-tari-netmap's collector actually uses in production -- previously had no SOCKS5/
+`.onion` support at all, unlike the base `Probe`/`ProbeWithOptions` pair added in the Part A/B
+addendum above. This closes that gap by mirroring the exact `Probe`/`ProbeWithOptions` pattern:
+
+- **`ProbeChainMetadataWithOptions(ctx, addr, opts ProbeOptions)`** (new) now holds the entire
+  previous body of `ProbeChainMetadata`, with the one change described in the Part A/B
+  addendum's own dial-selection contract: the dial step now calls `dialForProbe(ctx, addr,
+  opts)` (`p2p/socks.go`, untouched by this pass) instead of constructing a bare `net.Dialer`
+  directly.
+- **`ProbeChainMetadata(ctx, addr)`** is now a thin wrapper:
+  `return ProbeChainMetadataWithOptions(ctx, addr, ProbeOptions{})` -- same relationship as
+  `Probe`/`ProbeWithOptions`. Its zero-config behavior (always dial directly, no SOCKS proxy) is
+  unchanged: this is a pure refactor plus one new code path, nothing else about the existing
+  call's behavior changes.
+- **`ProbeGetPeersWithOptions(ctx, addr, req, opts ProbeOptions)`** (new) and
+  **`ProbeGetPeers(ctx, addr, req)`** (now a thin wrapper) follow the identical pattern for
+  `p2p/getpeers_probe.go`.
+- `p2p/socks.go` and `p2p/probe.go` themselves are untouched by this pass (confirmed via `git
+  diff main -- p2p/socks.go p2p/probe.go` producing an empty diff) -- the new dial-selection code
+  path in both `...WithOptions` functions reuses `dialForProbe`/`isOnionAddr`/`ProbeOptions`
+  exactly as already proven by the Part A/B addendum's own tests; no new SOCKS5/onion logic was
+  written.
+
+### Byte-exact verified against real Tari Rust source
+
+Nothing new here beyond what Part A/B already covers -- this pass introduces no new wire-format
+or protocol logic of its own; it only reroutes two existing functions' dial step through the
+already-verified `dialForProbe`.
+
+### Go-only, internally consistent, NOT independently cross-verified against a real Rust run
+
+- **Dial-selection logic itself** is not re-verified in this pass because it isn't new: it's the
+  same `dialForProbe`/`isOnionAddr` code path `ProbeWithOptions` has used since the Part A/B
+  addendum, exercised again here only to confirm it composes correctly with the Yamux/RPC layers
+  `ProbeChainMetadataWithOptions`/`ProbeGetPeersWithOptions` add on top. New tests added in this
+  pass (`p2p/chainmetadata_getpeers_probe_test.go`) confirm:
+  - `ProbeChainMetadataWithOptions`/`ProbeGetPeersWithOptions` against a `.onion` address with no
+    `SocksProxyAddr` configured surface the exact same "requires a SOCKS5 proxy" error
+    `dialForProbe` produces, unrewrapped
+    (`TestProbeChainMetadataWithOptionsOnionWithoutProxyReturnsSpecificError`,
+    `TestProbeGetPeersWithOptionsOnionWithoutProxyReturnsSpecificError`).
+  - A non-`.onion` address still completes the full Noise/identity-exchange/Yamux/RPC round trip
+    successfully through both `...WithOptions` functions with the zero value of `ProbeOptions`
+    AND with a configured-but-bogus `SocksProxyAddr` (proving the proxy is bypassed, not merely
+    unset), against a real in-process responder built by combining the already-existing
+    `ResponderHandshake`/`newSessionReadWriteCloser`/real `yamux.Server` pattern from
+    `p2p/yamux_rpc_integration_test.go` with a real loopback `net.Listener`/dial (rather than
+    `net.Pipe()`), for both `get_chain_metadata`
+    (`TestProbeChainMetadataWithOptionsNonOnionBypassesConfiguredProxy`) and the streaming
+    `get_peers` call (`TestProbeGetPeersWithOptionsNonOnionBypassesConfiguredProxy`).
+  - `ProbeChainMetadata`/`ProbeGetPeers` themselves still succeed end to end against that same
+    in-process responder (`TestProbeChainMetadataZeroConfigStillWorks`,
+    `TestProbeGetPeersZeroConfigStillWorks`), and produce byte-for-byte the same error as their
+    `...WithOptions(..., ProbeOptions{})` counterparts against an unreachable address
+    (`TestProbeChainMetadataWithOptionsZeroValueMatchesProbeChainMetadata`,
+    `TestProbeGetPeersWithOptionsZeroValueMatchesProbeGetPeers`) -- the "zero-config behavior
+    unchanged" guarantee for this refactor.
+  - `gofmt -l .`, `go vet ./...`, `go build ./...`, and `go test -race ./...` are all clean; `go
+    mod tidy` leaves `go.mod`/`go.sum` unchanged (no new dependency was needed -- everything used
+    already existed).
+- **A real, end-to-end `.onion` dial through an actual Tor daemon, exercised via
+  `ProbeChainMetadataWithOptions`/`ProbeGetPeersWithOptions` against a live onion-addressed Tari
+  peer.** This has explicitly NOT been tested in this pass -- no Tor daemon and no
+  onion-addressed Tari peer are available in this sandbox, the same documented gap the Part A/B
+  addendum already called out for the base `Probe`/`ProbeWithOptions` pair, now equally
+  applicable to these two new functions. Closing this gap requires a real Tor daemon (reportedly
+  now running on the netmap deployment host, per the dispatching task) plus wiring
+  `ProbeChainMetadataWithOptions`/`ProbeGetPeersWithOptions` into go-tari-netmap's collector with
+  a real `ProbeOptions.SocksProxyAddr` pointed at it -- both of which are explicitly out of scope
+  for this pass.
