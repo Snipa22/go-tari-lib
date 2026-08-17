@@ -7,7 +7,7 @@
 // versions:
 // 	protoc-gen-go v1.36.12
 // 	protoc        v5.29.1
-// source: identity.proto
+// source: p2p/proto/identity.proto
 
 package proto
 
@@ -39,7 +39,7 @@ type PeerIdentityMsg struct {
 
 func (x *PeerIdentityMsg) Reset() {
 	*x = PeerIdentityMsg{}
-	mi := &file_identity_proto_msgTypes[0]
+	mi := &file_p2p_proto_identity_proto_msgTypes[0]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -51,7 +51,7 @@ func (x *PeerIdentityMsg) String() string {
 func (*PeerIdentityMsg) ProtoMessage() {}
 
 func (x *PeerIdentityMsg) ProtoReflect() protoreflect.Message {
-	mi := &file_identity_proto_msgTypes[0]
+	mi := &file_p2p_proto_identity_proto_msgTypes[0]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -64,7 +64,7 @@ func (x *PeerIdentityMsg) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PeerIdentityMsg.ProtoReflect.Descriptor instead.
 func (*PeerIdentityMsg) Descriptor() ([]byte, []int) {
-	return file_identity_proto_rawDescGZIP(), []int{0}
+	return file_p2p_proto_identity_proto_rawDescGZIP(), []int{0}
 }
 
 func (x *PeerIdentityMsg) GetAddresses() [][]byte {
@@ -114,7 +114,7 @@ type IdentitySignature struct {
 
 func (x *IdentitySignature) Reset() {
 	*x = IdentitySignature{}
-	mi := &file_identity_proto_msgTypes[1]
+	mi := &file_p2p_proto_identity_proto_msgTypes[1]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -126,7 +126,7 @@ func (x *IdentitySignature) String() string {
 func (*IdentitySignature) ProtoMessage() {}
 
 func (x *IdentitySignature) ProtoReflect() protoreflect.Message {
-	mi := &file_identity_proto_msgTypes[1]
+	mi := &file_p2p_proto_identity_proto_msgTypes[1]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -139,7 +139,7 @@ func (x *IdentitySignature) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use IdentitySignature.ProtoReflect.Descriptor instead.
 func (*IdentitySignature) Descriptor() ([]byte, []int) {
-	return file_identity_proto_rawDescGZIP(), []int{1}
+	return file_p2p_proto_identity_proto_rawDescGZIP(), []int{1}
 }
 
 func (x *IdentitySignature) GetVersion() uint32 {
@@ -170,11 +170,11 @@ func (x *IdentitySignature) GetUpdatedAt() int64 {
 	return 0
 }
 
-var File_identity_proto protoreflect.FileDescriptor
+var File_p2p_proto_identity_proto protoreflect.FileDescriptor
 
-const file_identity_proto_rawDesc = "" +
+const file_p2p_proto_identity_proto_rawDesc = "" +
 	"\n" +
-	"\x0eidentity.proto\x12\x13tari.comms.identity\"\xf2\x01\n" +
+	"\x18p2p/proto/identity.proto\x12\x13tari.comms.identity\"\xf2\x01\n" +
 	"\x0fPeerIdentityMsg\x12\x1c\n" +
 	"\taddresses\x18\x01 \x03(\fR\taddresses\x12\x1a\n" +
 	"\bfeatures\x18\x02 \x01(\rR\bfeatures\x12/\n" +
@@ -190,23 +190,23 @@ const file_identity_proto_rawDesc = "" +
 	"updated_at\x18\x04 \x01(\x03R\tupdatedAtB*Z(github.com/Snipa22/go-tari-lib/p2p/protob\x06proto3"
 
 var (
-	file_identity_proto_rawDescOnce sync.Once
-	file_identity_proto_rawDescData []byte
+	file_p2p_proto_identity_proto_rawDescOnce sync.Once
+	file_p2p_proto_identity_proto_rawDescData []byte
 )
 
-func file_identity_proto_rawDescGZIP() []byte {
-	file_identity_proto_rawDescOnce.Do(func() {
-		file_identity_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_identity_proto_rawDesc), len(file_identity_proto_rawDesc)))
+func file_p2p_proto_identity_proto_rawDescGZIP() []byte {
+	file_p2p_proto_identity_proto_rawDescOnce.Do(func() {
+		file_p2p_proto_identity_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_p2p_proto_identity_proto_rawDesc), len(file_p2p_proto_identity_proto_rawDesc)))
 	})
-	return file_identity_proto_rawDescData
+	return file_p2p_proto_identity_proto_rawDescData
 }
 
-var file_identity_proto_msgTypes = make([]protoimpl.MessageInfo, 2)
-var file_identity_proto_goTypes = []any{
+var file_p2p_proto_identity_proto_msgTypes = make([]protoimpl.MessageInfo, 2)
+var file_p2p_proto_identity_proto_goTypes = []any{
 	(*PeerIdentityMsg)(nil),   // 0: tari.comms.identity.PeerIdentityMsg
 	(*IdentitySignature)(nil), // 1: tari.comms.identity.IdentitySignature
 }
-var file_identity_proto_depIdxs = []int32{
+var file_p2p_proto_identity_proto_depIdxs = []int32{
 	1, // 0: tari.comms.identity.PeerIdentityMsg.identity_signature:type_name -> tari.comms.identity.IdentitySignature
 	1, // [1:1] is the sub-list for method output_type
 	1, // [1:1] is the sub-list for method input_type
@@ -215,26 +215,26 @@ var file_identity_proto_depIdxs = []int32{
 	0, // [0:1] is the sub-list for field type_name
 }
 
-func init() { file_identity_proto_init() }
-func file_identity_proto_init() {
-	if File_identity_proto != nil {
+func init() { file_p2p_proto_identity_proto_init() }
+func file_p2p_proto_identity_proto_init() {
+	if File_p2p_proto_identity_proto != nil {
 		return
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
-			RawDescriptor: unsafe.Slice(unsafe.StringData(file_identity_proto_rawDesc), len(file_identity_proto_rawDesc)),
+			RawDescriptor: unsafe.Slice(unsafe.StringData(file_p2p_proto_identity_proto_rawDesc), len(file_p2p_proto_identity_proto_rawDesc)),
 			NumEnums:      0,
 			NumMessages:   2,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
-		GoTypes:           file_identity_proto_goTypes,
-		DependencyIndexes: file_identity_proto_depIdxs,
-		MessageInfos:      file_identity_proto_msgTypes,
+		GoTypes:           file_p2p_proto_identity_proto_goTypes,
+		DependencyIndexes: file_p2p_proto_identity_proto_depIdxs,
+		MessageInfos:      file_p2p_proto_identity_proto_msgTypes,
 	}.Build()
-	File_identity_proto = out.File
-	file_identity_proto_goTypes = nil
-	file_identity_proto_depIdxs = nil
+	File_p2p_proto_identity_proto = out.File
+	file_p2p_proto_identity_proto_goTypes = nil
+	file_p2p_proto_identity_proto_depIdxs = nil
 }

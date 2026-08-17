@@ -1,0 +1,50 @@
+// Vendored verbatim (field names, numbers and types) from Tari's
+// `tari/comms/dht/src/proto/rpc.proto` (github.com/tari-project/tari, `development` branch), as
+// transcribed for the `t/dht/1` `get_peers` streaming RPC (source: `comms/dht/src/rpc/mod.rs`).
+// Package name and message shapes are exact; only the go_package option below is specific to
+// this repo's generated-code layout.
+//
+// Deliberate deviation from the real Rust source (documented, not an oversight): the real Tari
+// source has a SEPARATE `comms/dht/src/proto/common.proto`, package `tari.dht.common`, with an
+// `IdentitySignature` message that is structurally identical to the one already vendored in
+// p2p/proto/identity.proto (package `tari.comms.identity`, message `IdentitySignature`: fields
+// version=1 uint32, signature=2 bytes, public_nonce=3 bytes, updated_at=4 int64). Rather than
+// vendoring a byte-identical duplicate proto message under a different package purely to mirror
+// Rust's package boundary, this file directly imports and reuses
+// `tari.comms.identity.IdentitySignature` from p2p/proto/identity.proto. On the wire, protobuf
+// field encoding doesn't care about a message type's "name" or declaring package, only its
+// field numbers/types/shape, which are identical here -- so this substitution has no behavioral
+// effect on the wire format; it only avoids pure boilerplate duplication in this Go port. See
+// p2p/VERIFICATION.md's "Part E addendum" for further discussion.
+syntax = "proto3";
+
+package tari.dht.rpc;
+
+import "p2p/proto/identity.proto";
+
+option go_package = "github.com/Snipa22/go-tari-lib/p2p/proto";
+
+message GetPeersRequest {
+    uint32 n = 1;
+    bool include_clients = 2;
+    uint32 max_claims = 3;
+    uint32 max_addresses_per_claim = 4;
+}
+
+message GetPeersResponse {
+    PeerInfo peer = 1;
+}
+
+message PeerInfo {
+    bytes public_key = 1;
+    repeated PeerIdentityClaim claims = 2;
+}
+
+message PeerIdentityClaim {
+    repeated bytes addresses = 1;
+    uint32 peer_features = 2;
+    // See the file-level doc comment above: real Tari declares this field as
+    // `tari.dht.common.IdentitySignature`, a byte-identical sibling message in a separate proto
+    // package this Go port does not vendor a duplicate of.
+    tari.comms.identity.IdentitySignature identity_signature = 3;
+}

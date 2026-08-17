@@ -596,3 +596,101 @@ order, field order, `SetUniformBytes` over `FromUniformBytes`, scalar-then-point
 was implemented directly per the confirmed-correct Rust source reads described above and worked
 on the first live attempt against all 9 nodes, so there is no "tried X, then Y" trail to report
 here beyond what's already described.
+
+## Part E addendum (2026-08-17): t/dht/1 get_peers streaming RPC
+
+This section documents a new, additive-only capability: the `t/dht/1` RPC service's
+`get_peers` method (method number 10), a STREAMING RPC (one request, many responses,
+terminated by a `RpcResponse` with the FIN flag set). This is unrelated to and does not touch
+`comms/dht/src/discovery/*`'s broadcast-based peer-discovery-by-pubkey mechanism, which remains
+out of scope. New files only: `p2p/proto/dht_rpc.proto` + generated `p2p/proto/dht_rpc.pb.go`,
+`p2p/proto/dht_rpc_test.go`, `p2p/rpc/dht_getpeers.go` + `p2p/rpc/dht_getpeers_test.go`,
+`p2p/getpeers_probe.go`. No existing file's *behavior* was changed, with one narrow exception
+described below (`p2p/proto/identity.pb.go`, regenerated with different internal descriptor
+metadata only -- no field/API change).
+
+### Byte-exact verified against real Tari Rust source (this pass)
+
+- The `t/dht/1` protocol id string (`[]byte("t/dht/1")`, 7 bytes, no NUL terminator) --
+  confirmed via `#[tari_rpc(protocol_name = b"t/dht/1", ...)]` on the DHT RPC service trait,
+  `comms/dht/src/rpc/mod.rs`.
+- The `get_peers` method number, `10` -- confirmed via `#[rpc(method = 10)] async fn
+  get_peers` on the same trait/file. This is a separate RPC service/trait from
+  `get_chain_metadata`'s `BaseNodeSyncService` (`t/blksync/1`, method 5) -- method numbers are
+  explicit per-method attributes scoped to their own trait, not a single global sequence, so
+  method 10 here does not collide with or continue from method 5 there.
+- `RpcMessageFlags::FIN = 0x01` and its "may co-occur with a real payload" semantics --
+  confirmed via `comms/core/src/protocol/rpc/message.rs`'s `bitflags!` definition and
+  `RpcResponse::is_fin`, plus the real `exceeded_message_size` constructor in that same file
+  which sets `flags: RpcMessageFlags::FIN` together with a real (non-empty) payload rather than
+  as a bare empty terminator. `rpc.GetPeers` (`p2p/rpc/dht_getpeers.go`) decodes any non-empty
+  payload on every response received, unconditionally, BEFORE checking the FIN flag, specifically
+  to handle this case correctly -- exercised directly by
+  `TestGetPeersHappyPathFINOnLastPayload` (`p2p/rpc/dht_getpeers_test.go`), which sends the last
+  peer's payload and FIN in the same message with no separate terminator frame at all, alongside
+  `TestGetPeersHappyPathSeparateFINTerminator`, which exercises the other real shape (all
+  payload-bearing messages flags=0, followed by a separate empty-payload FIN terminator).
+- The `GetPeersRequest`/`GetPeersResponse`/`PeerInfo`/`PeerIdentityClaim` protobuf field
+  names/numbers/types -- transcribed verbatim from `comms/dht/src/proto/rpc.proto` into
+  `p2p/proto/dht_rpc.proto`, with one documented, deliberate deviation (see below).
+
+### Go-only, internally consistent, NOT independently cross-verified against a real Rust run
+
+- **`IdentitySignature` Go-type reuse instead of duplicate vendoring**: the real Tari source
+  declares `PeerIdentityClaim.identity_signature` as `tari.dht.common.IdentitySignature`, a
+  message defined in a SEPARATE proto file (`comms/dht/src/proto/common.proto`, package
+  `tari.dht.common`) that is structurally byte-identical to the `IdentitySignature` message this
+  repo already vendors under `tari.comms.identity` (`p2p/proto/identity.proto`, from
+  `comms/core/src/proto/identity.proto`): same field names, numbers, and types (`version=1
+  uint32`, `signature=2 bytes`, `public_nonce=3 bytes`, `updated_at=4 int64`). Rather than
+  vendoring a second, byte-identical proto message purely to mirror Rust's package boundary,
+  `p2p/proto/dht_rpc.proto` imports `p2p/proto/identity.proto` directly and declares
+  `identity_signature` as `tari.comms.identity.IdentitySignature`. This is a deliberate,
+  documented simplification (see the doc comments in `dht_rpc.proto` itself), not an oversight:
+  on the wire, protobuf field encoding is determined by field number/type/shape, not by the
+  declaring message's name or proto package, so this substitution has no effect on the actual
+  bytes produced/consumed. It does mean this repo's Go type graph has one fewer distinct
+  generated struct than a hypothetical byte-for-byte proto-package-preserving port would, which is
+  an intentional trade-off, not something later work needs to "fix".
+- **`p2p/proto/identity.pb.go` was regenerated in this pass** (same source `.proto`, same
+  fields/types/API -- `git diff` shows only internal generated symbol renames, e.g.
+  `file_identity_proto_init` -> `file_p2p_proto_identity_proto_init`, and the exported-but-unused
+  `File_identity_proto` package variable renamed to `File_p2p_proto_identity_proto`; confirmed via
+  `grep -rn "File_identity_proto"` across the repo that nothing outside this one generated file
+  referenced that variable). This was necessary, not cosmetic: `identity.pb.go` had originally
+  been generated with a different `--proto_path` (registering its internal file descriptor as
+  `identity.proto`) than `chain_metadata.pb.go`/`rpc.pb.go` (registered as
+  `p2p/proto/chain_metadata.proto`/`p2p/proto/rpc.proto`, i.e. generated with `--proto_path=.`
+  from the repo root). `dht_rpc.proto`'s `import "p2p/proto/identity.proto";` only
+  cross-file-links correctly against a copy of `identity.pb.go` registered under that same
+  `p2p/proto/identity.proto` path -- without this regeneration, `go build` fails with `undefined:
+  file_p2p_proto_identity_proto_init` (observed directly in this sandbox before the fix). This is
+  flagged explicitly, rather than silently folded into the diff, since `identity.pb.go` was not
+  one of this task's newly-added files and regenerating an existing generated file is exactly the
+  kind of change AGENTS.md asks to be called out rather than assumed-fine.
+- **`dht_rpc.pb.go` is protoc-generated in this sandbox** (`protoc v29.1` / `protoc-gen-go
+  v1.36.12`, matching the versions already recorded in the other `.pb.go` files' header
+  comments) **without any side-by-side Rust `prost`-generated comparison** -- there is no Rust
+  toolchain available in this sandbox (same limitation noted for other Rust-side comparisons
+  throughout this document), so "the generated Go struct shape matches `comms/dht/src/proto/
+  rpc.proto`" was checked by reading the `.proto` source and the generated `.pb.go` output
+  directly, not by diffing against an actual `prost`-generated Rust struct.
+- **Most importantly: `p2p.ProbeGetPeers` has NOT been run against any real Tari mainnet node in
+  this pass.** The in-process responder tests added in `p2p/rpc/dht_getpeers_test.go`
+  (`TestGetPeersHappyPathSeparateFINTerminator`, `TestGetPeersHappyPathFINOnLastPayload`,
+  `TestGetPeersProtocolNotSupported`, `TestGetPeersNonZeroStatus`) only prove that this package's
+  own client (`rpc.GetPeers`) and this package's own fake in-process responder
+  (`serveGetPeersStreaming`) correctly talk to EACH OTHER -- both sides are this repo's Go code,
+  running the streaming/FIN logic each side implemented from the same read of the Rust source.
+  That is meaningfully weaker evidence than a real Tari node accepting and correctly streaming a
+  `get_peers` response, in exactly the same way the Part C addendum's in-process Yamux tests were
+  weaker evidence than the Part D addendum's actual 9/9 live-node run against
+  `get_chain_metadata`. **Live verification of `p2p.ProbeGetPeers` against real Tari mainnet
+  nodes is required before this streaming implementation can be considered final -- that
+  determination belongs to the dispatching agent, not to this pass.** Per this session's own
+  history with `get_chain_metadata` (4 real bugs found ONLY by live testing across the Part C/D
+  addenda above -- missing Yamux layering, missing identity exchange, missing identity
+  signature -- none caught by unit tests), it would not be surprising, and would not represent a
+  failure of this pass, if at least one more real bug (e.g. in FIN-detection edge cases, response
+  ordering, or streaming backpressure/deadline behavior against a real node's actual timing) only
+  surfaces once this is tested live.
