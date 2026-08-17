@@ -72,6 +72,18 @@ func ProbeChainMetadata(ctx context.Context, addr string) (*ChainMetadataInfo, e
 	}
 	defer session.Close()
 
+	// Identity exchange must happen before the Yamux upgrade, matching real Tari's own
+	// connection-establishment order (source: tari/comms/core/src/connection_manager/dialer.rs,
+	// `perform_socket_upgrade_procedure`: identity exchange runs directly on the post-handshake
+	// Noise session, and only once that -- plus the peer's own local validation of OUR identity
+	// message, see p2p/identity_signature.go -- succeeds does either side proceed to the Yamux
+	// substream multiplexing layer). Skipping this step (as an earlier version of this function
+	// did) leaves the peer still waiting for our identity message while we instead go straight to
+	// Yamux, which real nodes do not expect and will not complete.
+	if _, err := session.ExchangeIdentity(ctx); err != nil {
+		return nil, fmt.Errorf("p2p: exchanging identity with %s: %w", addr, err)
+	}
+
 	// Yamux multiplexes over the Noise session's own frame-oriented SendFrame/ReceiveFrame API
 	// (adapted to a plain io.ReadWriteCloser byte stream by sessionReadWriteCloser), NOT over the
 	// raw net.Conn -- Yamux's byte stream is the plaintext payload of Noise transport frames.
