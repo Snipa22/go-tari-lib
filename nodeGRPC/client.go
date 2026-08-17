@@ -278,3 +278,35 @@ func GetNodeIdentity() (*tari_generated.NodeIdentity, error) {
 	client := tari_generated.NewBaseNodeClient(grpcConn)
 	return client.Identify(context.Background(), nil)
 }
+
+// GetSyncProgress wraps the GetSyncProgress GRPC call, returning tip/local height, sync state,
+// a short human-readable description, and initial connected peer count.
+//
+// Deprecated: uses the unsafe package-level singleton connection. Use (*Client).GetSyncProgress
+// instead for concurrency-safe, per-node connections.
+func GetSyncProgress() (*tari_generated.SyncProgressResponse, error) {
+	client := tari_generated.NewBaseNodeClient(grpcConn)
+	return client.GetSyncProgress(context.Background(), &tari_generated.Empty{})
+}
+
+// GetMempoolStats wraps the GetMempoolStats GRPC call, returning unconfirmed tx count, reorg tx
+// count, and unconfirmed weight.
+//
+// Deprecated: uses the unsafe package-level singleton connection. Use (*Client).GetMempoolStats
+// instead for concurrency-safe, per-node connections.
+func GetMempoolStats() (*tari_generated.MempoolStatsResponse, error) {
+	client := tari_generated.NewBaseNodeClient(grpcConn)
+	return client.GetMempoolStats(context.Background(), &tari_generated.Empty{})
+}
+
+// GetSyncProgress wraps the GetSyncProgress GRPC call for this Client's own connection.
+func (c *Client) GetSyncProgress() (*tari_generated.SyncProgressResponse, error) {
+	client := tari_generated.NewBaseNodeClient(c.conn)
+	return client.GetSyncProgress(context.Background(), &tari_generated.Empty{})
+}
+
+// GetMempoolStats wraps the GetMempoolStats GRPC call for this Client's own connection.
+func (c *Client) GetMempoolStats() (*tari_generated.MempoolStatsResponse, error) {
+	client := tari_generated.NewBaseNodeClient(c.conn)
+	return client.GetMempoolStats(context.Background(), &tari_generated.Empty{})
+}
