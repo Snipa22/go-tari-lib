@@ -121,3 +121,105 @@ fetched and read directly (not just relied on from the pre-existing prose descri
   returns an empty (non-nil) payload for a zero-length frame instead. This is a documented
   simplification (per P2P_SPEC.md section 5b) rather than an oversight; it is not expected to be
   exercised given the fixed, always-non-empty message shapes this client sends/expects.
+
+## Part A/B addendum (2026-08-17): RPC-over-P2P get_chain_metadata + SOCKS5/.onion dialing
+
+This section documents what was added on top of the above (`p2p/rpc/*`,
+`p2p/chainmetadata_probe.go`, `p2p/socks.go`), using the same
+byte-exact-verified-vs-Go-only-internally-consistent disclosure pattern as the rest of this
+document. The originating scratch spec for this pass (`p2p/RPC_TOR_SPEC.md`) was deleted after
+landing this work -- it was a working document, not meant to ship; everything load-bearing from
+it is captured here and in the code's own doc comments.
+
+### Byte-exact verified against real Tari Rust source
+
+- **Protocol-negotiation-frame-vs-canonical-frame nesting** (the one genuinely ambiguous point
+  going into this pass): protocol negotiation frames (`p2p/rpc/negotiation.go`) are sent as the
+  raw plaintext of a single Noise transport message (i.e. passed directly to this package's
+  existing `Session.SendFrame`/returned directly from `Session.ReceiveFrame`, with NO u32
+  canonical-frame wrapper), whereas the RPC session handshake and RPC request/response messages
+  (`p2p/rpc/handshake.go`, `p2p/rpc/chainmetadata.go`) ARE wrapped in a u32-BE
+  length-delimited "canonical frame" (`p2p/rpc/canonicalframe.go`) before being handed to
+  `Session.SendFrame`/read back from `Session.ReceiveFrame`. This was traced through, and is
+  byte-exact verified against, real fetched Tari source:
+  `comms/core/src/protocol/negotiation.rs` (`ProtocolNegotiation::new` constructed directly on
+  the raw `NoiseSocket`, `read_frame`/`write_frame_flush` calling `socket.read_exact`/`write_all`
+  directly -- no `CanonicalFraming`/`LengthDelimitedCodec` involved), `comms/core/src/framing.rs`
+  (`framing::canonical` = `tokio_util::codec::LengthDelimitedCodec` with default
+  big-endian/u32 length-field settings, applied only AFTER negotiation succeeds), and
+  `comms/core/src/protocol/rpc/handshake.rs` (`Handshake::new(framed: &mut CanonicalFraming<T>)`,
+  confirming the handshake/request/response layer is the canonical-framed one).
+- **Protocol negotiation frame layout** `[len (1 byte u8)][flags (1 byte)][protocol id (up to
+  255 bytes)]`, the `NONE`/`OPTIMISTIC`/`TERMINATE`/`NOT_SUPPORTED` flag bits, and the
+  non-optimistic outbound negotiation flow (write once, read once, check flags, else compare the
+  echoed protocol id byte-exact) -- confirmed via `comms/core/src/protocol/negotiation.rs`.
+- **RPC session handshake** message flow and `RpcSession`/`RpcSessionReply` shape (including the
+  `accepted_version`/`rejected` oneof and `HandshakeRejectReason` enum) -- confirmed via
+  `comms/core/src/protocol/rpc/handshake.rs` (`perform_client_handshake`).
+- **`t/blksync/1` protocol id string** (`[]byte("t/blksync/1")`, 11 bytes, no NUL terminator) --
+  confirmed via `#[tari_rpc(protocol_name = b"t/blksync/1", ...)]` on the `BaseNodeSyncService`
+  trait, `base_layer/core/src/base_node/sync/rpc/mod.rs`.
+- **get_chain_metadata method number `5`** -- confirmed via `#[rpc(method = 5)] async fn
+  get_chain_metadata` on the same trait (method numbers there are explicit per-method
+  attributes -- 1,2,3,4,6,8 are the other methods present, with no method 7, ruling out a
+  sequential/inferred numbering scheme).
+- **`ChainMetadata` protobuf field names/numbers/types** (`best_block_height=1`,
+  `best_block_hash=2`, `accumulated_difficulty_low=5`, `accumulated_difficulty_high=8`,
+  `pruned_height=6`, `timestamp=7`) -- confirmed via
+  `base_layer/core/src/base_node/proto/chain_metadata.proto`. The real file's unused
+  `import "google/protobuf/wrappers.proto";` (dead even in the real file -- no field actually
+  uses a wrapper type) is deliberately omitted from `p2p/proto/chain_metadata.proto`.
+- **`RpcRequest`/`RpcResponse` protobuf shape** (`request_id`, `method`, `flags`, `deadline`,
+  `payload` on the request; `request_id`, `status`, `flags`, `payload` on the response) --
+  confirmed via `comms/core/src/proto/rpc.proto`.
+- **SOCKS5/.onion dialing is a bog-standard SOCKS5 proxy dial, no Tari-specific extension** --
+  confirmed via `comms/core/src/transports/socks.rs`.
+
+### Go-only, internally consistent, NOT independently cross-verified against a real Rust run
+
+- **`p2p/proto/rpc.pb.go` and `p2p/proto/chain_metadata.pb.go`** were generated with `protoc
+  --go_out=. --go_opt=paths=source_relative` against protoc v29.1 / protoc-gen-go v1.36.12 in
+  this sandbox -- the same protoc-gen-go version already recorded in the header comment of the
+  pre-existing `p2p/proto/identity.pb.go` (protoc-gen-go v1.36.12), so generated-code style/
+  package layout is consistent across all three `.proto` files in this repo.
+- **The full RPC-over-P2P flow (negotiation -> session handshake -> get_chain_metadata request/
+  response) end to end against a real, live Tari base node.** This has NOT been exercised in
+  this sandbox (no reachable target / out of scope for this pass, matching the same limitation
+  already documented above for the Noise_XX handshake + identity exchange). Confidence rests on:
+  (a) the byte-exact-verified wire-format primitives listed above, and (b) `p2p/rpc`'s in-process
+  responder tests (`p2p/rpc/rpc_test.go`,
+  `p2p/rpc/negotiation_handshake_external_test.go`), which exercise the exact same
+  `NegotiateProtocol`/`PerformSessionHandshake`/`GetChainMetadata` client code paths against a
+  responder built from this package's own `NegotiateProtocolInbound`/
+  `PerformSessionHandshakeResponder`/`RejectSessionHandshakeResponder` helpers over a real
+  Noise_XX-handshaked `Session` pair (`net.Pipe()` + `InitiatorHandshake`/`ResponderHandshake`) --
+  covering the happy path, the negotiation NOT_SUPPORTED path, the RPC-handshake-rejected path,
+  and the RpcResponse.status-non-zero path -- but both ends of those tests are this package's own
+  code, not a real Tari Rust node.
+- **The value of a real peer's `RpcResponse.status` error-payload encoding** for a non-zero
+  status: per p2p/RPC_TOR_SPEC.md section A3 this was explicitly out of scope to specify/decode
+  (`GetChainMetadata` surfaces only the raw status code via `*rpc.RPCStatusError` and does not
+  attempt to decode `payload` in that case), so there is nothing to verify here beyond "the raw
+  uint32 status field is surfaced faithfully."
+- **`golang.org/x/net/proxy`'s own SOCKS5 client implementation correctness** (RFC 1928/1929
+  handshake bytes on the wire) is relied on as-is; not independently re-verified byte-by-byte in
+  this pass, since it's a well-established, widely used part of the Go standard extended library
+  rather than Tari-specific code.
+- **A real, end-to-end `.onion` dial through an actual Tor daemon.** This is explicitly NOT
+  verified -- no Tor daemon is available in this sandbox. `p2p/socks_test.go` verifies: (1) a
+  `.onion` address with no `SocksProxyAddr` configured returns the specific
+  onion-requires-a-proxy error rather than a generic timeout/DNS error; (2) a `.onion` address
+  WITH a `SocksProxyAddr` configured actually attempts to go through that proxy address (proven
+  against a real local TCP listener standing in for "the SOCKS proxy" -- the SOCKS5 handshake
+  itself is expected to fail against that non-SOCKS listener, which is the point: it proves the
+  code reached and spoke to the configured proxy rather than trying to resolve the `.onion`
+  hostname via DNS); and (3) a non-`.onion` address with a SocksProxyAddr configured anyway still
+  dials directly, bypassing the proxy entirely (proven against a real loopback listener while
+  pointing SocksProxyAddr at a reserved-then-closed, guaranteed-unreachable port). None of these
+  three tests involve a real Tor daemon or a real onion-service peer -- that remains a documented
+  gap, to be verified independently, out of scope for this sandbox.
+- **`p2p.ProbeChainMetadata`** (`p2p/chainmetadata_probe.go`) is a thin composition of
+  `InitiatorHandshake` (already covered above) and `p2p/rpc.GetChainMetadata` (covered above) --
+  it introduces no new wire-format details of its own, so its correctness rests entirely on the
+  two pieces it composes; it has no dedicated live-network test in this package's own suite for
+  the same "no guaranteed reachable target" reason `Probe` itself doesn't.

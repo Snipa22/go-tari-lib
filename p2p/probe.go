@@ -13,7 +13,6 @@ package p2p
 import (
 	"context"
 	"fmt"
-	"net"
 	"time"
 )
 
@@ -24,7 +23,18 @@ import (
 // Probe does not perform a live network probe as part of this package's own automated test
 // suite (P2P_SPEC.md section 8 point 5) -- see p2p_test.go for an equivalent in-process
 // initiator/responder test over the exact same code path (dial replaced by an in-memory pipe).
+//
+// Probe is a thin wrapper around ProbeWithOptions(ctx, addr, ProbeOptions{}) -- its exact
+// existing signature and zero-config behavior (always dial directly, no SOCKS proxy) is
+// unchanged; see ProbeWithOptions for `.onion`/SOCKS5 support (p2p/RPC_TOR_SPEC.md Part B).
 func Probe(ctx context.Context, addr string) (*PeerInfo, error) {
+	return ProbeWithOptions(ctx, addr, ProbeOptions{})
+}
+
+// ProbeWithOptions is Probe with additional, optional behavior configured via opts -- currently,
+// SOCKS5 dialing for `.onion` addresses (see ProbeOptions and dialForProbe in socks.go). With the
+// zero value of ProbeOptions, ProbeWithOptions behaves identically to Probe.
+func ProbeWithOptions(ctx context.Context, addr string, opts ProbeOptions) (*PeerInfo, error) {
 	start := time.Now()
 
 	staticKeypair, err := GenerateRistrettoKeypair()
@@ -32,8 +42,7 @@ func Probe(ctx context.Context, addr string) (*PeerInfo, error) {
 		return nil, fmt.Errorf("p2p: generating ephemeral static keypair for probe: %w", err)
 	}
 
-	dialer := net.Dialer{}
-	conn, err := dialer.DialContext(ctx, "tcp", addr)
+	conn, err := dialForProbe(ctx, addr, opts)
 	if err != nil {
 		return nil, fmt.Errorf("p2p: dialing %s: %w", addr, err)
 	}
