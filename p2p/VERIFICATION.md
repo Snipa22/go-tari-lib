@@ -408,3 +408,191 @@ Concretely:
   the wire." **Live-node re-verification of this fix is required before it can be considered
   final** -- that determination belongs to the dispatching agent, after re-testing against the
   same real Tari mainnet nodes that originally surfaced this bug, not to this pass.
+
+## Part D addendum (2026-08-17): ProbeChainMetadata missing identity exchange + outgoing PeerIdentityMsg missing a signature (peer resets connection)
+
+This section documents two further fixes landed on top of the Part C addendum above, following
+the same live-node re-verification the Part C addendum called for as a precondition to being
+considered final.
+
+### Bug 1: `ProbeChainMetadata` never called `ExchangeIdentity`
+
+`p2p.Probe`/`ProbeWithOptions` (`p2p/probe.go`) always call `session.ExchangeIdentity(ctx)`
+immediately after `InitiatorHandshake` succeeds. `p2p.ProbeChainMetadata`
+(`p2p/chainmetadata_probe.go`) did not -- it went straight from `InitiatorHandshake` to
+constructing the Yamux adapter/client, skipping identity exchange entirely. Real Tari nodes run
+identity exchange directly on the post-handshake Noise session and only proceed to the Yamux
+substream layer once that completes (source: `tari/comms/core/src/connection_manager/dialer.rs`,
+`perform_socket_upgrade_procedure`) -- so a peer talking to this client via `ProbeChainMetadata`
+was left waiting for an identity message this client never sent, while this client instead tried
+to go straight to Yamux, which does not work against a real node (though it happened to not be
+caught by this package's own in-process Yamux integration test, since that test's fake responder
+has no identity-exchange expectations of its own to violate).
+
+**Fix:** `ProbeChainMetadata` now calls `session.ExchangeIdentity(ctx)` (wrapping its error the
+same way `Probe` does) between `InitiatorHandshake` and the Yamux adapter/client construction,
+before opening any substream. The returned `*PeerInfo` is discarded (matching what the task
+scoping this fix explicitly allowed) since `ChainMetadataInfo` has no fields for it yet.
+
+### Bug 2: outgoing `PeerIdentityMsg` had no `IdentitySignature` -> peer resets the connection
+
+**Symptom:** even after fixing Bug 1 above, a live probe against a real Tari mainnet node
+completed the Noise_XX handshake and identity exchange (both sides successfully read/decoded each
+other's `PeerIdentityMsg`), but the peer then reset/closed the connection almost immediately
+afterward, before any Yamux SYN/data got through.
+
+**Root cause**, confirmed by fetching and reading the real Tari Rust source directly (not
+re-derived from prose/memory):
+
+- `comms/core/src/connection_manager/common.rs`, `validate_peer_identity_message`: every real
+  Tari node validates the PEER'S `PeerIdentityMsg` on the equivalent of both the inbound
+  (`listener.rs`, `perform_socket_upgrade_procedure`) and outbound (`dialer.rs`, same function
+  name) connection-establishment paths -- i.e. a real node dialed by this client validates what
+  THIS CLIENT sent it, immediately after identity exchange, before proceeding further:
+
+  ```rust
+  let peer_identity_claim = PeerIdentityClaim {
+      addresses,
+      features: PeerFeatures::from_bits(features)...,
+      signature: identity_signature
+          .ok_or(PeerManagerError::MissingIdentitySignature)?   // <-- fails here
+          .try_into()?,
+  };
+  ```
+
+- This client's outgoing `PeerIdentityMsg` (`ourPeerIdentityMsgBytes`, `p2p/identity.go`) sent
+  `IdentitySignature: nil` -- no signature at all. Every real node this client dialed was
+  therefore hitting `MissingIdentitySignature` and aborting the connection right after identity
+  exchange, exactly matching the observed symptom. Confirmed (by tracing `dialer.rs`'s
+  `perform_socket_upgrade_procedure` line by line) that there is no other wire message between
+  identity exchange and the Yamux upgrade on the real Tari side -- the only steps in between are
+  local validation/ban-list checks, no additional wire traffic -- so a missing/invalid signature
+  on our side is sufficient on its own to explain the reset, with no other missing step required.
+
+**Fix implemented** -- make the outgoing `PeerIdentityMsg` carry a real, valid
+`IdentitySignature`, a standard Ristretto255 Schnorr signature over a domain-separated challenge,
+signed with the same long-term Ristretto255 static keypair already used for the Noise_XX
+handshake:
+
+- **`p2p/hashing.go`**: added `DomainSeparatedHasher512`, a `Blake2b<U64>`
+  (Blake2b-512/64-byte-digest) counterpart to the existing (`Blake2b<U32>`/32-byte)
+  `DomainSeparatedHasher`, sharing the exact same tag-building (`domainSeparationTag`) and
+  length-prefix-chaining logic (factored out into a shared `writeLengthPrefixedTo` helper, so the
+  two variants cannot drift apart from each other). Also added the `CommsCorePeerManagerDomain`
+  domain separation tag (`"com.tari.comms.core.peer_manager"`, **version 1** -- an explicit 3-arg
+  `hash_domain!` invocation, distinct from `CommsCoreHashDomain`'s version 0 -- confirmed by
+  fetching `tari/comms/core/src/peer_manager/hashing.rs`) and the `identity_signature` label
+  constant (`IDENTITY_SIGNATURE`, same source file).
+- **`p2p/identity_signature.go`** (new): `buildOurIdentitySignature(staticKeypair)` implements
+  `IdentitySignature::sign_new`/`construct_challenge`
+  (`tari/comms/core/src/peer_manager/identity_signature.rs`) and `sign_raw_uniform`
+  (`tari-crypto/src/signatures/schnorr.rs`) exactly:
+  - Challenge: `e = H(P||R||version||updated_at||features)` via
+    `newCommsCorePeerManagerHasher512("identity_signature").Chain(P).Chain(R).Chain([version]).
+    Chain(le64(updated_at)).Chain(le32(features))` -- `P` = our own static public key
+    (`staticKeypair.Public`), `R` = a fresh signature nonce's public point, `version` = the single
+    `IdentitySignature::LATEST_VERSION` byte (`0`), `updated_at` = current unix seconds (LE
+    `int64`), `features` = `0` (matching this client's `PeerIdentityMsg.Features`). No
+    per-address chain step, since this client claims no addresses (`Addresses: nil`) -- a
+    documented no-op, not a missing feature.
+  - Nonce: a fresh, uniformly random scalar/point pair, reusing the exact same "64 random bytes ->
+    `ristretto255.Scalar.SetUniformBytes` -> `ScalarBaseMult`" construction
+    `GenerateRistrettoKeypair` (`p2p/ristretto_dh.go`) already implements, rather than
+    duplicating it.
+  - Challenge-to-scalar reduction: `e, _ := ristretto255.NewScalar().SetUniformBytes(challenge)`
+    (the 64-byte Blake2b-512 digest fed directly into wide/uniform scalar reduction -- the same
+    primitive `GenerateRistrettoKeypair` already relies on, confirming `SetUniformBytes` over
+    `FromUniformBytes` was the right (non-deprecated) call to use here).
+  - Signing: `s = e*secretKey + secretNonce` via `ristretto255.Scalar.Multiply` then `.Add`.
+  - Output: `IdentitySignature{Version: 0, Signature: s.Bytes(), PublicNonce: R.Bytes(),
+    UpdatedAt: updatedAt}` -- exactly the shape `p2p/proto/identity.pb.go`'s generated
+    `IdentitySignature` message already expects; no proto schema changes were needed.
+- **`p2p/session.go`**: `Session` gained a `LocalStaticKeypair noise.DHKey` field (our own
+  long-term keypair, previously not retained anywhere on `Session` -- only the PEER's recovered
+  static key was kept, as `PeerStaticKey`). `ExchangeIdentity` now calls
+  `ourPeerIdentityMsgBytes(s.LocalStaticKeypair)` instead of the old zero-argument
+  `ourPeerIdentityMsgBytes()`.
+- **`p2p/handshake.go`**: both `InitiatorHandshake` and `ResponderHandshake` (which already
+  receive `staticKeypair noise.DHKey` as a parameter) now set `LocalStaticKeypair: staticKeypair`
+  on the `*Session` they return.
+- **`p2p/identity.go`**: `ourPeerIdentityMsgBytes` now takes `staticKeypair noise.DHKey`, calls
+  `buildOurIdentitySignature(staticKeypair)`, and sets the result as
+  `PeerIdentityMsg.IdentitySignature` instead of `nil`. Its doc comment (and the outdated
+  "deliberately omitted" framing) was corrected to describe this as the confirmed live-network
+  bug it was, not a deliberate simplification.
+
+### Byte-exact verified against real Tari Rust source (this pass)
+
+- `CommsCorePeerManagerDomain` domain string/version and the `identity_signature` label --
+  confirmed by fetching `tari/comms/core/src/peer_manager/hashing.rs`.
+- The `construct_challenge` field order/encoding (`P||R||version(u8 LE)||updated_at(u64
+  LE)||features(u32 LE)||addresses...`, addresses chained per-address if any are claimed) and
+  `sign_raw_uniform`'s `s = e*k + r` -- confirmed by fetching
+  `tari/comms/core/src/peer_manager/identity_signature.rs` and
+  `tari-crypto/src/signatures/schnorr.rs` directly.
+- `validate_peer_identity_message`'s `MissingIdentitySignature` rejection on the connection-
+  establishment path -- confirmed by fetching `tari/comms/core/src/connection_manager/common.rs`.
+- The `DomainSeparatedHasher`/`DomainSeparatedHasher512` length-prefix-chaining construction
+  itself was already byte-exact verified (see the top of this document); this pass only adds a
+  64-byte-output sibling using that same, unchanged framing logic -- not a new claim about the
+  framing itself.
+
+### Go-only, internally consistent, NOT independently cross-verified against a real Rust run
+
+- **The *value* of `buildOurIdentitySignature`'s output for any given real Ristretto255 keypair**
+  was not compared against a real `tari_crypto`/Rust-computed signature for the same inputs (no
+  Rust toolchain available in this sandbox, same limitation as `noiseDHKDF` above). What *was*
+  independently checked in this pass (`p2p/identity_signature_test.go`,
+  `TestBuildOurIdentitySignatureIsCryptographicallyValid`): the produced signature satisfies the
+  standard Ristretto255 Schnorr verification equation `s*G == R + e*P`, recomputing `e` via the
+  exact same challenge construction a real verifying peer would use -- this proves the signing
+  math is internally self-consistent (a real Schnorr signature over that challenge, verifiable
+  with the claimed public key), though it does not by itself prove byte-for-byte agreement with
+  Rust's `sign_raw_uniform` output for identical inputs. The live-node verification below is what
+  actually closes that gap in practice: real Tari nodes run their own Rust `verify_raw_uniform`
+  against exactly this signature and accepted it (see below), which is strong evidence the
+  encoding, field order, and scalar arithmetic all agree with the real implementation, not just
+  that this Go code agrees with itself.
+
+### Live verification: SUCCEEDED against all 9 real Tari mainnet nodes
+
+Both fixes above were verified together with a real, live `ProbeChainMetadata` call (Noise_XX
+handshake -> identity exchange, now signed -> Yamux -> RPC-over-P2P `get_chain_metadata`) against
+all 9 nodes listed for this pass, all port 18189:
+
+```
+23.226.69.178, 23.226.69.234, 107.167.84.90, 15.235.227.47, 15.235.227.59,
+15.235.228.36, 51.91.215.198, 51.210.222.91, 141.94.99.110
+```
+
+**Result: 9/9 succeeded**, each returning a real, non-zero `get_chain_metadata` response. Actual
+captured output (via a temporary, build-tag-gated `p2p/live_manual_test.go`, deleted after this
+verification -- not committed):
+
+```
+23.226.69.178:18189: SUCCESS: BestBlockHeight=325944 BestBlockHash=58752a20dcd233e361b40485381da7204803aa9773a570b733aa6e73e93b0e5f PrunedHeight=0 Timestamp=1786992803 AccDiffLow=00000000118469d7f99bec838d3a9892b64f17e170e5ed0f07997c3c06bf3e80 AccDiffHigh=0000000000000000000000000000000000000000000000000000000000000000 Latency=206.647141ms
+23.226.69.234:18189: SUCCESS: BestBlockHeight=325944 BestBlockHash=58752a20dcd233e361b40485381da7204803aa9773a570b733aa6e73e93b0e5f PrunedHeight=0 Timestamp=1786992803 AccDiffLow=00000000118469d7f99bec838d3a9892b64f17e170e5ed0f07997c3c06bf3e80 AccDiffHigh=0000000000000000000000000000000000000000000000000000000000000000 Latency=206.712924ms
+107.167.84.90:18189: SUCCESS: BestBlockHeight=325944 BestBlockHash=58752a20dcd233e361b40485381da7204803aa9773a570b733aa6e73e93b0e5f PrunedHeight=0 Timestamp=1786992803 AccDiffLow=00000000118469d7f99bec838d3a9892b64f17e170e5ed0f07997c3c06bf3e80 AccDiffHigh=0000000000000000000000000000000000000000000000000000000000000000 Latency=222.885856ms
+15.235.227.47:18189: SUCCESS: BestBlockHeight=325944 BestBlockHash=58752a20dcd233e361b40485381da7204803aa9773a570b733aa6e73e93b0e5f PrunedHeight=0 Timestamp=1786992803 AccDiffLow=00000000118469d7f99bec838d3a9892b64f17e170e5ed0f07997c3c06bf3e80 AccDiffHigh=0000000000000000000000000000000000000000000000000000000000000000 Latency=2.349498743s
+15.235.227.59:18189: SUCCESS: BestBlockHeight=325944 BestBlockHash=58752a20dcd233e361b40485381da7204803aa9773a570b733aa6e73e93b0e5f PrunedHeight=0 Timestamp=1786992803 AccDiffLow=00000000118469d7f99bec838d3a9892b64f17e170e5ed0f07997c3c06bf3e80 AccDiffHigh=0000000000000000000000000000000000000000000000000000000000000000 Latency=2.293604553s
+15.235.228.36:18189: SUCCESS: BestBlockHeight=325944 BestBlockHash=58752a20dcd233e361b40485381da7204803aa9773a570b733aa6e73e93b0e5f PrunedHeight=0 Timestamp=1786992803 AccDiffLow=00000000118469d7f99bec838d3a9892b64f17e170e5ed0f07997c3c06bf3e80 AccDiffHigh=0000000000000000000000000000000000000000000000000000000000000000 Latency=2.162441312s
+51.91.215.198:18189: SUCCESS: BestBlockHeight=325944 BestBlockHash=58752a20dcd233e361b40485381da7204803aa9773a570b733aa6e73e93b0e5f PrunedHeight=0 Timestamp=1786992803 AccDiffLow=00000000118469d7f99bec838d3a9892b64f17e170e5ed0f07997c3c06bf3e80 AccDiffHigh=0000000000000000000000000000000000000000000000000000000000000000 Latency=1.756216044s
+51.210.222.91:18189: SUCCESS: BestBlockHeight=325944 BestBlockHash=58752a20dcd233e361b40485381da7204803aa9773a570b733aa6e73e93b0e5f PrunedHeight=0 Timestamp=1786992803 AccDiffLow=00000000118469d7f99bec838d3a9892b64f17e170e5ed0f07997c3c06bf3e80 AccDiffHigh=0000000000000000000000000000000000000000000000000000000000000000 Latency=1.758219617s
+141.94.99.110:18189: SUCCESS: BestBlockHeight=325944 BestBlockHash=58752a20dcd233e361b40485381da7204803aa9773a570b733aa6e73e93b0e5f PrunedHeight=0 Timestamp=1786992803 AccDiffLow=00000000118469d7f99bec838d3a9892b64f17e170e5ed0f07997c3c06bf3e80 AccDiffHigh=0000000000000000000000000000000000000000000000000000000000000000 Latency=1.765493694s
+```
+
+All 9 nodes report the same `BestBlockHeight`/`BestBlockHash` (expected -- they are all synced to
+the same mainnet chain tip at the time of this test), and the fact that all 9 independent,
+real, Rust-implemented Tari nodes accepted this client's signed identity, completed the Yamux
+upgrade, and served a real RPC response is strong practical confirmation that both fixes in this
+addendum are correct end to end -- not just internally self-consistent Go code. This closes the
+"Live-node re-verification of this fix is required before it can be considered final" note left
+open at the end of the Part C addendum above (for the Yamux layering fix) and additionally closes
+the same kind of gap for the two fixes documented in this Part D addendum.
+
+Prior to arriving at this working signature construction, no failed live-network attempts with an
+*incorrect* signature encoding were left in place to iterate against -- the algorithm above (byte
+order, field order, `SetUniformBytes` over `FromUniformBytes`, scalar-then-point-encoding order)
+was implemented directly per the confirmed-correct Rust source reads described above and worked
+on the first live attempt against all 9 nodes, so there is no "tried X, then Y" trail to report
+here beyond what's already described.
