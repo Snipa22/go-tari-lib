@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.2.0](https://github.com/Snipa22/go-tari-lib/compare/v1.1.0...v1.2.0) (2026-08-18)
+
+
+### Features
+
+* **p2p:** add ProbeOptions-aware ProbeChainMetadataWithOptions/ProbeGetPeersWithOptions ([27944a3](https://github.com/Snipa22/go-tari-lib/commit/27944a3455ae6b8c0498eb9fba84aa8e24da45d5))
+* **p2p:** make the network wire byte configurable via ProbeOptions.NetworkByte ([01f3c61](https://github.com/Snipa22/go-tari-lib/commit/01f3c6186f75ea22a1c7021ae5f3cb760c62bc51))
+
 ## [1.1.0](https://github.com/Snipa22/go-tari-lib/compare/v1.0.0...v1.1.0) (2026-08-17)
 
 
