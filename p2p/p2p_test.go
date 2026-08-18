@@ -58,7 +58,7 @@ func TestInitiatorResponderNoiseXXAndIdentityExchange(t *testing.T) {
 
 	go func() {
 		defer wg.Done()
-		session, err := p2p.InitiatorHandshake(ctx, initiatorConn, initiatorStatic)
+		session, err := p2p.InitiatorHandshake(ctx, initiatorConn, initiatorStatic, p2p.NetworkByteMainNet)
 		initiatorResultCh <- handshakeResult{session: session, err: err}
 	}()
 

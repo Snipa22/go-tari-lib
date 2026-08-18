@@ -297,9 +297,11 @@ Also needed, as internal building blocks reusable by other go-tari-* consumers l
 them, don't bury as unexported):
 - `type RistrettoDH struct{}` implementing `noise.DHFunc` (section 3).
 - `GenerateRistrettoKeypair() (noise.DHKey, error)` convenience wrapper.
-- `func InitiatorHandshake(ctx context.Context, conn net.Conn, staticKeypair noise.DHKey) (*Session, error)`
-  — writes wire byte, runs the 3-message Noise_XX exchange as initiator, wraps the resulting
-  cipher states + peer static pubkey in a `Session`.
+- `func InitiatorHandshake(ctx context.Context, conn net.Conn, staticKeypair noise.DHKey, networkByte byte) (*Session, error)`
+  — writes the given network wire byte (see `NetworkByte*` constants and
+  `ProbeOptions.NetworkByte` for configuring this per-network, e.g. MainNet 0x00 vs. Esmeralda
+  0x26), runs the 3-message Noise_XX exchange as initiator, wraps the resulting cipher states +
+  peer static pubkey in a `Session`.
 - `type Session struct { ... }` wrapping the post-handshake `net.Conn` + tx/rx `*noise.CipherState`
   + `PeerStaticKey []byte`, with methods to send/receive length-prefixed encrypted frames
   (section 5b) and a method `ExchangeIdentity(ctx context.Context) (*PeerIdentityMsg, error)`

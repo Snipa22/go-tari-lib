@@ -47,7 +47,7 @@ func handshakeBothSides(t *testing.T) (client, server *p2p.Session) {
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		s, err := p2p.InitiatorHandshake(ctx, clientConn, clientStatic)
+		s, err := p2p.InitiatorHandshake(ctx, clientConn, clientStatic, p2p.NetworkByteMainNet)
 		clientCh <- result{s, err}
 	}()
 	go func() {

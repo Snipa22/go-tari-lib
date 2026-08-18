@@ -52,7 +52,7 @@ func ProbeWithOptions(ctx context.Context, addr string, opts ProbeOptions) (*Pee
 		_ = conn.SetDeadline(deadline)
 	}
 
-	session, err := InitiatorHandshake(ctx, conn, staticKeypair)
+	session, err := InitiatorHandshake(ctx, conn, staticKeypair, opts.NetworkByte)
 	if err != nil {
 		return nil, fmt.Errorf("p2p: performing Noise_XX handshake with %s: %w", addr, err)
 	}
