@@ -9,14 +9,32 @@ import (
 	"github.com/flynn/noise"
 )
 
-// networkWireByte is the single byte the dialing/outbound side writes immediately after TCP
-// connect, BEFORE any Noise bytes (source: tari/comms/core/src/protocol/network_info.rs,
-// `NodeNetworkInfo.network_wire_byte`, `#[derive(Default)]` -> `0x00`).
+// defaultNetworkWireByte is the single byte the dialing/outbound side writes immediately after
+// TCP connect, BEFORE any Noise bytes (source: tari/comms/core/src/protocol/network_info.rs,
+// `NodeNetworkInfo.network_wire_byte`, `#[derive(Default)]` -> `0x00`), used when the caller
+// doesn't configure a different one. The default/zero-config value is MainNet -- see
+// NetworkByteMainNet below, which this constant is defined in terms of.
 //
 // The reserved value `0xa7` (`LIVENESS_WIRE_MODE`, source:
 // tari/comms/core/src/connection_manager/wire_mode.rs) is documented here for context only --
-// this package never implements or emits liveness-wire-mode; it always sends 0x00.
-const networkWireByte byte = 0x00
+// this package never implements or emits liveness-wire-mode; it always sends a real network
+// byte.
+const defaultNetworkWireByte = NetworkByteMainNet
+
+// NetworkByte* are the real per-network wire bytes Tari nodes use as the very first raw byte of
+// a P2P connection, before Noise starts (source: tari/common/src/configuration/network.rs,
+// `pub enum Network { MainNet = 0x00, StageNet = 0x01, NextNet = 0x02, LocalNet = 0x10,
+// Igor = 0x24, Esmeralda = 0x26 }`). These are plain named byte constants for consumer
+// convenience when setting ProbeOptions.NetworkByte (see p2p/socks.go); no other behavior is
+// attached to them.
+const (
+	NetworkByteMainNet   byte = 0x00
+	NetworkByteStageNet  byte = 0x01
+	NetworkByteNextNet   byte = 0x02
+	NetworkByteLocalNet  byte = 0x10
+	NetworkByteIgor      byte = 0x24
+	NetworkByteEsmeralda byte = 0x26
+)
 
 // tariPrologue is the exact Noise prologue byte string Tari uses for every comms connection
 // (source: tari/comms/core/src/noise/config.rs, `NoiseConfig::upgrade_socket`, local constant
@@ -46,13 +64,16 @@ func newTariCipherSuite() noise.CipherSuite {
 // inspecting the real `NoiseSocket` implementation in tari/comms/core/src/noise/socket.rs.
 //
 // conn must already be a connected net.Conn (dialing is the caller's responsibility, e.g. via
-// Probe). staticKeypair is our own long-term Ristretto255 identity keypair.
-func InitiatorHandshake(ctx context.Context, conn net.Conn, staticKeypair noise.DHKey) (*Session, error) {
+// Probe). staticKeypair is our own long-term Ristretto255 identity keypair. networkByte is the
+// single network wire byte written first (see the NetworkByte* constants above and
+// ProbeOptions.NetworkByte in p2p/socks.go; callers wanting the pre-existing default/zero-config
+// behavior should pass NetworkByteMainNet/defaultNetworkWireByte, i.e. 0x00).
+func InitiatorHandshake(ctx context.Context, conn net.Conn, staticKeypair noise.DHKey, networkByte byte) (*Session, error) {
 	if err := checkContext(ctx); err != nil {
 		return nil, err
 	}
 
-	if _, err := conn.Write([]byte{networkWireByte}); err != nil {
+	if _, err := conn.Write([]byte{networkByte}); err != nil {
 		return nil, fmt.Errorf("p2p: writing network wire byte: %w", err)
 	}
 
@@ -192,7 +213,8 @@ func ResponderHandshake(ctx context.Context, conn net.Conn, staticKeypair noise.
 
 // liveWireMode is `LIVENESS_WIRE_MODE` (source:
 // tari/comms/core/src/connection_manager/wire_mode.rs), documented for context only -- see
-// networkWireByte above. Not implemented, only checked for and rejected with a clear error.
+// defaultNetworkWireByte/NetworkByte* above. Not implemented, only checked for and rejected with
+// a clear error.
 const liveWireMode byte = 0xa7
 
 func checkContext(ctx context.Context) error {

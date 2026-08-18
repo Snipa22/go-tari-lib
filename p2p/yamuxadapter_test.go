@@ -43,7 +43,7 @@ func yamuxAdapterTestSessions(t *testing.T) (a, b *Session) {
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		s, err := InitiatorHandshake(ctx, connA, staticA)
+		s, err := InitiatorHandshake(ctx, connA, staticA, NetworkByteMainNet)
 		chA <- result{s, err}
 	}()
 	go func() {

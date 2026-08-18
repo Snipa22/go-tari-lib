@@ -18,6 +18,16 @@ type ProbeOptions struct {
 	// comms/core/src/transports/socks.rs: a bog-standard SOCKS5 proxy dial, onion-specific,
 	// no Tari-specific extension).
 	SocksProxyAddr string
+
+	// NetworkByte is the single byte written as the very first raw byte of a P2P connection,
+	// before Noise starts (source: tari/comms/core/src/protocol/network_info.rs,
+	// NodeNetworkInfo.network_wire_byte; real Tari listeners hard-reject a connection whose byte
+	// doesn't match their own configured network, source:
+	// tari/comms/core/src/connection_manager/listener.rs). The zero value (0x00) is MainNet,
+	// matching this package's pre-existing default behavior. See the NetworkByte* constants in
+	// p2p/handshake.go for other real Tari networks' values (source:
+	// tari/common/src/configuration/network.rs), e.g. NetworkByteEsmeralda = 0x26.
+	NetworkByte byte
 }
 
 // isOnionAddr reports whether addr's host (as returned by net.SplitHostPort) ends in ".onion"
