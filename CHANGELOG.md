@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.3.0](https://github.com/Snipa22/go-tari-lib/compare/v1.2.0...v1.3.0) (2026-08-23)
+
+
+### Features
+
+* **address:** add real, byte-exact Tari address parsing/validation/encoding ([6b569a7](https://github.com/Snipa22/go-tari-lib/commit/6b569a768f4a32affd9d48d6ddd03d90dcb0914e))
+
+
+### Bug Fixes
+
+* **address:** correct doc.go's Parse function name reference ([87ce040](https://github.com/Snipa22/go-tari-lib/commit/87ce040bc9ca631593e801d6180e420ed8755c24))
+
 ## [1.2.0](https://github.com/Snipa22/go-tari-lib/compare/v1.1.0...v1.2.0) (2026-08-23)
 
 
