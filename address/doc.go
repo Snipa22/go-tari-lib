@@ -29,6 +29,6 @@
 //   - TariAddress.Hex()/FromHex
 //   - TariAddress.EmojiString()/FromEmojiString (33-char single / 67+
 //     char dual emoji IDs using the real 256-entry EMOJI table)
-//   - ParseTariAddress (FromStr equivalent: try emoji, then base58,
+//   - Parse (FromStr equivalent: try emoji, then base58,
 //     then hex, exactly mirroring impl FromStr for TariAddress)
 package address
