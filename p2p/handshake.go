@@ -22,18 +22,38 @@ import (
 const defaultNetworkWireByte = NetworkByteMainNet
 
 // NetworkByte* are the real per-network wire bytes Tari nodes use as the very first raw byte of
-// a P2P connection, before Noise starts (source: tari/common/src/configuration/network.rs,
-// `pub enum Network { MainNet = 0x00, StageNet = 0x01, NextNet = 0x02, LocalNet = 0x10,
-// Igor = 0x24, Esmeralda = 0x26 }`). These are plain named byte constants for consumer
-// convenience when setting ProbeOptions.NetworkByte (see p2p/socks.go); no other behavior is
-// attached to them.
+// a P2P connection, before Noise starts. The actual byte checked on the wire by a real node
+// (source: tari/comms/core/src/connection_manager/listener.rs) is NOT the `Network` enum's
+// discriminant -- it's whatever `Network::as_wire_byte()` returns for that variant (source:
+// tari/common/src/configuration/network.rs):
+//
+//	pub fn as_wire_byte(self) -> u8 {
+//	    let wire_byte = match self {
+//	        Network::MainNet => self.as_byte(),   // = 0x00, matches discriminant
+//	        Network::StageNet => self.as_byte(),  // = 0x01, matches discriminant
+//	        Network::NextNet => 82,               // = 0x52, DOES NOT match discriminant (0x02)!
+//	        Network::LocalNet => self.as_byte(),  // = 0x10, matches discriminant
+//	        Network::Igor => self.as_byte(),      // = 0x24, matches discriminant
+//	        Network::Esmeralda => 202,            // = 0xca, DOES NOT match discriminant (0x26)!
+//	    };
+//	    ...
+//	}
+//
+// In other words: MainNet, StageNet, LocalNet, and Igor's wire bytes happen to equal their enum
+// discriminant, but NextNet's wire byte (0x52) does NOT match its discriminant (0x02), and
+// Esmeralda's wire byte (0xca) does NOT match its discriminant (0x26). The constants below are
+// the wire bytes (i.e. as_wire_byte()'s output), not the enum discriminants -- do not "fix" them
+// back to the discriminant values cited above; that was this exact bug once already (a real,
+// live Esmeralda node rejected 0x26 with "invalid wire format byte. Expected ca got: 26").
+// These are plain named byte constants for consumer convenience when setting
+// ProbeOptions.NetworkByte (see p2p/socks.go); no other behavior is attached to them.
 const (
 	NetworkByteMainNet   byte = 0x00
 	NetworkByteStageNet  byte = 0x01
-	NetworkByteNextNet   byte = 0x02
+	NetworkByteNextNet   byte = 0x52
 	NetworkByteLocalNet  byte = 0x10
 	NetworkByteIgor      byte = 0x24
-	NetworkByteEsmeralda byte = 0x26
+	NetworkByteEsmeralda byte = 0xca
 )
 
 // tariPrologue is the exact Noise prologue byte string Tari uses for every comms connection

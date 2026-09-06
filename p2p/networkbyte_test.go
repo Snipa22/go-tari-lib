@@ -93,8 +93,8 @@ func TestProbeZeroConfigWritesMainNetNetworkByte(t *testing.T) {
 
 // TestProbeWithOptionsNonDefaultNetworkByteIsWrittenToWire covers ProbeOptions.NetworkByte
 // actually being threaded through to InitiatorHandshake and written as the first raw byte on the
-// wire, for a real non-default Tari network value (Esmeralda, 0x26 -- source:
-// tari/common/src/configuration/network.rs).
+// wire, for a real non-default Tari network value (Esmeralda, 0xca -- source:
+// tari/common/src/configuration/network.rs, Network::as_wire_byte()).
 func TestProbeWithOptionsNonDefaultNetworkByteIsWrittenToWire(t *testing.T) {
 	got := firstByteWrittenByProbe(t, func(ctx context.Context, addr string) error {
 		_, err := ProbeWithOptions(ctx, addr, ProbeOptions{NetworkByte: NetworkByteEsmeralda})
