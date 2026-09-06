@@ -26,7 +26,8 @@ type ProbeOptions struct {
 	// tari/comms/core/src/connection_manager/listener.rs). The zero value (0x00) is MainNet,
 	// matching this package's pre-existing default behavior. See the NetworkByte* constants in
 	// p2p/handshake.go for other real Tari networks' values (source:
-	// tari/common/src/configuration/network.rs), e.g. NetworkByteEsmeralda = 0x26.
+	// tari/common/src/configuration/network.rs, Network::as_wire_byte()), e.g.
+	// NetworkByteEsmeralda = 0xca.
 	NetworkByte byte
 }
 
