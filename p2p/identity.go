@@ -25,6 +25,38 @@ const maxIdentityProtocolMsgSize = 1024
 // outgoingUserAgent identifies this client in its outgoing PeerIdentityMsg.
 const outgoingUserAgent = "go-tari-lib-p2p-probe/0.1"
 
+// FeaturesCommunicationNode is the wire value of `PeerFeatures::COMMUNICATION_NODE` (source:
+// tari/comms/core/src/peer_manager/peer_features.rs):
+//
+//	const MESSAGE_PROPAGATION = 0b0000_0001;
+//	const DHT_STORE_FORWARD   = 0b0000_0010;
+//	COMMUNICATION_NODE = MESSAGE_PROPAGATION | DHT_STORE_FORWARD; // = 3
+//
+// A real Tari node's DHT connectivity pool silently no-ops and never pools/gossips a peer whose
+// advertised features `.is_client()` (comms/dht/src/connectivity/mod.rs,
+// handle_new_peer_connected) -- i.e. a peer advertising `COMMUNICATION_CLIENT` (0, this
+// package's unchanged default -- see IdentityOptions) will never be treated as a routable node
+// by a real peer, only as a client. Pass this value as IdentityOptions.Features to
+// ExchangeIdentityWithOptions to advertise COMMUNICATION_NODE instead.
+const FeaturesCommunicationNode uint32 = 0b0000_0001 | 0b0000_0010
+
+// IdentityOptions configures the OUTGOING PeerIdentityMsg an ExchangeIdentityWithOptions call
+// sends. The zero value (Features=0 i.e. COMMUNICATION_CLIENT, Addresses=nil) matches
+// ExchangeIdentity's existing, unchanged behavior exactly -- this type only exists so callers
+// that need something other than that default (e.g. a responder wanting to advertise
+// COMMUNICATION_NODE, see FeaturesCommunicationNode) can opt in explicitly, without altering
+// ExchangeIdentity's behavior for every existing caller (P2P/RPC probes).
+type IdentityOptions struct {
+	// Features is the peer_features bitmask advertised in our outgoing PeerIdentityMsg.Features
+	// (source: tari/comms/core/src/peer_manager/peer_features.rs). See FeaturesCommunicationNode.
+	Features uint32
+	// Addresses is advertised in our outgoing PeerIdentityMsg.Addresses. nil/empty is fine (and
+	// is ExchangeIdentity's existing, unchanged behavior) -- a peer with no advertised reachable
+	// address is still valid, just not independently dialable by others from this identity
+	// message alone.
+	Addresses [][]byte
+}
+
 // identityExchangeTimeout is the 10-second read timeout Tari applies while waiting for the
 // peer's identity message (source: tari/comms/core/src/protocol/identity.rs,
 // `identity_exchange`: `time::timeout(Duration::from_secs(10), read_protocol_frame(...))`).
@@ -58,7 +90,7 @@ type PeerInfo struct {
 }
 
 // ourPeerIdentityMsgBytes builds and marshals this client's outgoing PeerIdentityMsg
-// (P2P_SPEC.md section 6): empty addresses, features=0, empty supported_protocols,
+// (P2P_SPEC.md section 6): the given addresses/features, empty supported_protocols,
 // user_agent="go-tari-lib-p2p-probe/0.1", and a real IdentitySignature signed with
 // staticKeypair (our own long-term Ristretto255 identity keypair -- the same one used for the
 // Noise_XX handshake; see identity_signature.go for the signing algorithm).
@@ -69,15 +101,15 @@ type PeerInfo struct {
 // (`PeerManagerError::MissingIdentitySignature`), aborting the connection immediately after
 // identity exchange -- before any Yamux traffic. That was a live-network-confirmed bug, not a
 // deliberate simplification; see p2p/VERIFICATION.md's "Part D addendum" for the full writeup.
-func ourPeerIdentityMsgBytes(staticKeypair noise.DHKey) ([]byte, error) {
+func ourPeerIdentityMsgBytes(staticKeypair noise.DHKey, features uint32, addresses [][]byte) ([]byte, error) {
 	sig, err := buildOurIdentitySignature(staticKeypair)
 	if err != nil {
 		return nil, fmt.Errorf("p2p: building our own identity signature: %w", err)
 	}
 
 	msg := &identitypb.PeerIdentityMsg{
-		Addresses:          nil,
-		Features:           0,
+		Addresses:          addresses,
+		Features:           features,
 		SupportedProtocols: nil,
 		UserAgent:          outgoingUserAgent,
 		IdentitySignature:  sig,

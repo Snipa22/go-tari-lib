@@ -90,14 +90,29 @@ func (s *Session) ReceiveFrame() ([]byte, error) {
 // ctx's deadline (if any) bounds the wait for the peer's identity message; if ctx has no
 // deadline, a 10-second timeout is applied, matching Tari's own
 // `time::timeout(Duration::from_secs(10), ...)` (tari/comms/core/src/protocol/identity.rs).
+//
+// ExchangeIdentity is a thin wrapper around ExchangeIdentityWithOptions(ctx, IdentityOptions{})
+// -- i.e. it always advertises Features=0 (COMMUNICATION_CLIENT) and no addresses, exactly
+// matching this function's pre-existing behavior for every caller (Probe/ProbeGetPeers/
+// ProbeChainMetadata). Callers that need to advertise something else (e.g. a responder
+// advertising COMMUNICATION_NODE -- see FeaturesCommunicationNode) should call
+// ExchangeIdentityWithOptions directly instead.
 func (s *Session) ExchangeIdentity(ctx context.Context) (*PeerInfo, error) {
+	return s.ExchangeIdentityWithOptions(ctx, IdentityOptions{})
+}
+
+// ExchangeIdentityWithOptions is ExchangeIdentity with the outgoing PeerIdentityMsg's
+// Features/Addresses configurable via opts, rather than hardcoded to Features=0/no addresses.
+// See IdentityOptions's doc comment; the zero value of IdentityOptions reproduces
+// ExchangeIdentity's exact existing behavior.
+func (s *Session) ExchangeIdentityWithOptions(ctx context.Context, opts IdentityOptions) (*PeerInfo, error) {
 	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, identityExchangeTimeout)
 		defer cancel()
 	}
 
-	ourMsgBytes, err := ourPeerIdentityMsgBytes(s.LocalStaticKeypair)
+	ourMsgBytes, err := ourPeerIdentityMsgBytes(s.LocalStaticKeypair, opts.Features, opts.Addresses)
 	if err != nil {
 		return nil, err
 	}
