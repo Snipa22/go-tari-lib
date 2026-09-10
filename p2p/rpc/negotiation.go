@@ -31,6 +31,31 @@ var ErrProtocolNotSupported = errors.New("rpc: peer does not support the request
 // more specific sentinel is available for callers that want to distinguish the two.
 var ErrProtocolTerminated = fmt.Errorf("rpc: peer terminated protocol negotiation: %w", ErrProtocolNotSupported)
 
+// UnsupportedProtocolError is returned by NegotiateProtocolInbound (and, via that call,
+// ServeGetPeers) when the peer requested a protocol id we don't support (the ONLY case that
+// happens on the RESPONDER/inbound side -- see NegotiateProtocolInbound's doc comment). It
+// carries the REQUESTED protocol id bytes (e.g. "t/msg/0.1", "t/blksync/1") so a caller wiring
+// up observability (e.g. a Prometheus counter labeled by the declined protocol -- see
+// ResponderConfig.OnSubstreamProtocolDeclined) can report exactly what the peer asked for,
+// something a plain sentinel error can't carry.
+//
+// Unwrap() returns ErrProtocolNotSupported, so existing errors.Is(err, ErrProtocolNotSupported)
+// checks against this error (or anything wrapping it via %w, e.g. ServeGetPeers' own error)
+// continue to work unchanged; callers that want the requested protocol id specifically should
+// use errors.As(err, &UnsupportedProtocolError{}).
+type UnsupportedProtocolError struct {
+	// Requested is the protocol id the peer asked for, exactly as received on the wire.
+	Requested []byte
+}
+
+func (e *UnsupportedProtocolError) Error() string {
+	return fmt.Sprintf("rpc: peer requested unsupported protocol %q: %v", e.Requested, ErrProtocolNotSupported)
+}
+
+func (e *UnsupportedProtocolError) Unwrap() error {
+	return ErrProtocolNotSupported
+}
+
 // encodeNegotiationFrame builds the protocol negotiation frame layout (source:
 // tari/comms/core/src/protocol/negotiation.rs doc comment + code):
 //
@@ -149,7 +174,7 @@ func NegotiateProtocolInbound(session Transport, supportedProtocols [][]byte) (n
 		if err := session.SendFrame(outFrame); err != nil {
 			return nil, fmt.Errorf("rpc: sending NOT_SUPPORTED negotiation reply: %w", err)
 		}
-		return nil, fmt.Errorf("rpc: peer requested unsupported protocol %q: %w", requested, ErrProtocolNotSupported)
+		return nil, &UnsupportedProtocolError{Requested: append([]byte(nil), requested...)}
 	}
 
 	outFrame, err := encodeNegotiationFrame(negotiationFlagNone, requested)

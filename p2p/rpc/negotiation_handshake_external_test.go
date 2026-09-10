@@ -57,8 +57,16 @@ func TestNegotiateProtocolNotSupported(t *testing.T) {
 	if !errors.Is(err, rpc.ErrProtocolNotSupported) {
 		t.Fatalf("expected errors.Is(err, rpc.ErrProtocolNotSupported), got: %v", err)
 	}
-	if respErr := <-responderErrCh; respErr == nil {
+	respErr := <-responderErrCh
+	if respErr == nil {
 		t.Fatalf("expected NegotiateProtocolInbound to also report an error for the unsupported protocol")
+	}
+	var unsupported *rpc.UnsupportedProtocolError
+	if !errors.As(respErr, &unsupported) {
+		t.Fatalf("expected a *rpc.UnsupportedProtocolError, got: %v (%T)", respErr, respErr)
+	}
+	if string(unsupported.Requested) != string(protocolID) {
+		t.Fatalf("UnsupportedProtocolError.Requested = %q, want %q", unsupported.Requested, protocolID)
 	}
 }
 

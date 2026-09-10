@@ -2,6 +2,7 @@ package p2p
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"sync"
@@ -76,6 +77,72 @@ type ResponderConfig struct {
 	// This deadline is CLEARED once identity exchange succeeds -- it does not bound the
 	// connection's subsequent long-lived Yamux/RPC lifetime.
 	ConnectionTimeout time.Duration
+
+	// The callbacks below exist purely for observability (e.g. a caller wiring up Prometheus
+	// counters, see go-tari-netmap's cmd/netmap-p2p-responder) -- every event they report
+	// already produces an equivalent cfg.Logf line at the same call site; these callbacks just
+	// give a structured, machine-countable hook onto the SAME events, rather than requiring a
+	// caller to parse log lines. All are optional (nil-safe, no-op if unset) and are called
+	// synchronously, inline, from the same per-connection/per-substream goroutine that would
+	// otherwise just call cfg.logf -- like OnPeerIdentity, they must not block or panic, since a
+	// slow/panicking callback would hang or crash that connection's goroutine.
+
+	// OnConnectionAccepted, if non-nil, is called once per accepted inbound TCP connection,
+	// immediately after listener.Accept() succeeds and before any handshake attempt.
+	OnConnectionAccepted func(remoteAddr net.Addr)
+
+	// OnHandshakeResult, if non-nil, is called once per accepted connection with the outcome of
+	// ResponderHandshake (Noise_XX). success is true iff the handshake completed without error.
+	OnHandshakeResult func(remoteAddr net.Addr, success bool)
+
+	// OnIdentityExchangeResult, if non-nil, is called once per connection that completed a
+	// successful handshake, with the outcome of ExchangeIdentityWithOptions. success is true
+	// iff the identity exchange completed without error. Unlike OnPeerIdentity (which only
+	// fires on success), this fires on BOTH outcomes, so a caller can count failures too.
+	OnIdentityExchangeResult func(remoteAddr net.Addr, success bool)
+
+	// OnGetPeersServed, if non-nil, is called once per substream on which a get_peers request
+	// was successfully served (i.e. rpcpkg.ServeGetPeers returned nil), with the number of
+	// peers included in that response (which may be 0).
+	OnGetPeersServed func(remoteAddr net.Addr, peerCount int)
+
+	// OnSubstreamProtocolDeclined, if non-nil, is called once per substream on which the peer
+	// requested a protocol id other than the one(s) this responder supports (currently always
+	// just `t/dht/1`, see handleResponderSubstream) -- i.e. NOT_SUPPORTED was sent back on the
+	// wire. protocol is the REQUESTED protocol id exactly as the peer sent it (e.g.
+	// "t/msg/0.1", "t/blksync/1"), recovered via rpcpkg.UnsupportedProtocolError -- see that
+	// type's doc comment for why a plain sentinel error can't carry this.
+	OnSubstreamProtocolDeclined func(remoteAddr net.Addr, protocol []byte)
+}
+
+func (c ResponderConfig) onConnectionAccepted(remoteAddr net.Addr) {
+	if c.OnConnectionAccepted != nil {
+		c.OnConnectionAccepted(remoteAddr)
+	}
+}
+
+func (c ResponderConfig) onHandshakeResult(remoteAddr net.Addr, success bool) {
+	if c.OnHandshakeResult != nil {
+		c.OnHandshakeResult(remoteAddr, success)
+	}
+}
+
+func (c ResponderConfig) onIdentityExchangeResult(remoteAddr net.Addr, success bool) {
+	if c.OnIdentityExchangeResult != nil {
+		c.OnIdentityExchangeResult(remoteAddr, success)
+	}
+}
+
+func (c ResponderConfig) onGetPeersServed(remoteAddr net.Addr, peerCount int) {
+	if c.OnGetPeersServed != nil {
+		c.OnGetPeersServed(remoteAddr, peerCount)
+	}
+}
+
+func (c ResponderConfig) onSubstreamProtocolDeclined(remoteAddr net.Addr, protocol []byte) {
+	if c.OnSubstreamProtocolDeclined != nil {
+		c.OnSubstreamProtocolDeclined(remoteAddr, protocol)
+	}
 }
 
 func (c ResponderConfig) logf(format string, args ...interface{}) {
@@ -153,6 +220,7 @@ func Serve(ctx context.Context, listener net.Listener, cfg ResponderConfig) erro
 			}
 		}
 		cfg.logf("p2p: accepted inbound connection from %s", conn.RemoteAddr())
+		cfg.onConnectionAccepted(conn.RemoteAddr())
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -179,9 +247,11 @@ func handleResponderConn(ctx context.Context, conn net.Conn, cfg ResponderConfig
 	session, err := ResponderHandshake(ctx, conn, cfg.StaticKeypair)
 	if err != nil {
 		cfg.logf("p2p: %s: Noise_XX handshake failed: %v", remote, err)
+		cfg.onHandshakeResult(remote, false)
 		return
 	}
 	cfg.logf("p2p: %s: Noise_XX handshake succeeded, peer static key=%x", remote, session.PeerStaticKey)
+	cfg.onHandshakeResult(remote, true)
 
 	identity, err := session.ExchangeIdentityWithOptions(ctx, IdentityOptions{
 		Features:  cfg.OurFeatures,
@@ -189,10 +259,12 @@ func handleResponderConn(ctx context.Context, conn net.Conn, cfg ResponderConfig
 	})
 	if err != nil {
 		cfg.logf("p2p: %s: identity exchange failed: %v", remote, err)
+		cfg.onIdentityExchangeResult(remote, false)
 		return
 	}
 	cfg.logf("p2p: %s: identity exchange succeeded: features=%d user_agent=%q addresses=%v",
 		remote, identity.Features, identity.UserAgent, identity.Addresses)
+	cfg.onIdentityExchangeResult(remote, true)
 
 	if cfg.OnPeerIdentity != nil {
 		cfg.OnPeerIdentity(remote, session.PeerStaticKey, identity)
@@ -244,9 +316,14 @@ func handleResponderSubstream(ctx context.Context, remote net.Addr, stream yamux
 
 	if err := rpcpkg.ServeGetPeers(transport, peers); err != nil {
 		cfg.logf("p2p: %s: substream: %v", remote, err)
+		var unsupported *rpcpkg.UnsupportedProtocolError
+		if errors.As(err, &unsupported) {
+			cfg.onSubstreamProtocolDeclined(remote, unsupported.Requested)
+		}
 		return
 	}
 	cfg.logf("p2p: %s: substream: served get_peers with %d peer(s)", remote, len(peers))
+	cfg.onGetPeersServed(remote, len(peers))
 }
 
 // yamuxStream is the minimal interface handleResponderSubstream needs from a Yamux substream
