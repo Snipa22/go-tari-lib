@@ -3,7 +3,9 @@ package p2p_test
 import (
 	"bytes"
 	"context"
+	"errors"
 	"net"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -52,8 +54,8 @@ func startTestResponder(t *testing.T, peers []*pb.PeerInfo, onIdentity func(net.
 	cfg := p2p.ResponderConfig{
 		StaticKeypair: responderStatic,
 		OurFeatures:   p2p.FeaturesCommunicationNode,
-		PeerListProvider: func() []*pb.PeerInfo {
-			return peers
+		PeerListProvider: func(ctx context.Context) ([]*pb.PeerInfo, error) {
+			return peers, nil
 		},
 		OnPeerIdentity: onIdentity,
 		Logf:           t.Logf,
@@ -266,5 +268,64 @@ func TestServeEmptyPeerListProvider(t *testing.T) {
 	}
 	if len(got) != 0 {
 		t.Fatalf("expected 0 peers with a nil PeerListProvider, got %d", len(got))
+	}
+}
+
+// TestServePeerListProviderErrorServesEmptyList covers PeerListProvider's error-handling
+// contract (see its doc comment): a PeerListProvider that returns a non-nil error -- exactly
+// what a real, DB-backed implementation does on a transient failure/timeout -- must degrade to
+// an EMPTY served peer list rather than crashing the substream/connection or propagating the
+// error to the get_peers client in any way ProbeGetPeersWithOptions would surface as a failure.
+func TestServePeerListProviderErrorServesEmptyList(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("starting loopback listener: %v", err)
+	}
+	defer listener.Close()
+
+	responderStatic, err := p2p.GenerateRistrettoKeypair()
+	if err != nil {
+		t.Fatalf("generating responder static keypair: %v", err)
+	}
+
+	providerErr := errors.New("simulated transient DB failure")
+	var providerCalled int32
+
+	cfg := p2p.ResponderConfig{
+		StaticKeypair: responderStatic,
+		OurFeatures:   p2p.FeaturesCommunicationNode,
+		PeerListProvider: func(ctx context.Context) ([]*pb.PeerInfo, error) {
+			atomic.AddInt32(&providerCalled, 1)
+			if ctx == nil {
+				t.Errorf("PeerListProvider called with a nil context.Context")
+			}
+			return fixtureResponderPeerInfos(), providerErr
+		},
+		Logf: t.Logf,
+	}
+
+	serveCtx, serveCancel := context.WithCancel(context.Background())
+	serveErrCh := make(chan error, 1)
+	go func() {
+		serveErrCh <- p2p.Serve(serveCtx, listener, cfg)
+	}()
+	defer func() {
+		serveCancel()
+		listener.Close()
+		<-serveErrCh
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	got, err := p2p.ProbeGetPeersWithOptions(ctx, listener.Addr().String(), rpcpkg.GetPeersRequest{N: 50}, p2p.ProbeOptions{})
+	if err != nil {
+		t.Fatalf("ProbeGetPeersWithOptions: %v (a PeerListProvider error must degrade to an empty list, not a client-visible failure)", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("expected 0 peers when PeerListProvider returns an error (even though it also returned a non-empty list alongside the error, which must be discarded), got %d", len(got))
+	}
+	if atomic.LoadInt32(&providerCalled) == 0 {
+		t.Fatalf("PeerListProvider was never called")
 	}
 }

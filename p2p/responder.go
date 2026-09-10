@@ -46,7 +46,15 @@ type ResponderConfig struct {
 	// return the current bounded, time-windowed "peers we've seen recently" list to serve. Serve
 	// itself knows nothing about time windows or storage -- that's entirely this callback's
 	// job. May be nil, in which case every get_peers request is served an empty list.
-	PeerListProvider func() []*pb.PeerInfo
+	//
+	// ctx is the same context.Context passed to Serve (cancelled on shutdown, NOT per-call
+	// bounded -- callers backed by a real, possibly slow/unreliable store (e.g. a Postgres
+	// query) that want a per-call deadline should derive their own context.WithTimeout from ctx
+	// inside the callback). A non-nil error is treated as "no peers available right now": it is
+	// logged via cfg.Logf and the get_peers request is served an EMPTY list rather than
+	// crashing or hanging the substream/connection -- a transient store failure must never take
+	// down an otherwise-healthy inbound connection.
+	PeerListProvider func(ctx context.Context) ([]*pb.PeerInfo, error)
 
 	// OnPeerIdentity, if non-nil, is called after a successful Noise_XX handshake + identity
 	// exchange on an accepted connection, reporting the peer's recovered static public key and
@@ -83,11 +91,20 @@ func (c ResponderConfig) connectionTimeout() time.Duration {
 	return responderHandshakeTimeout
 }
 
-func (c ResponderConfig) knownPeers() []*pb.PeerInfo {
+// knownPeers calls c.PeerListProvider (if set) and returns its peer list. A nil PeerListProvider,
+// or one that returns a non-nil error, yields an empty (nil) list -- see PeerListProvider's doc
+// comment on why a store failure must degrade to "no peers" rather than propagate and take down
+// the substream/connection. Errors are logged via c.logf, tagged with remote for traceability.
+func (c ResponderConfig) knownPeers(ctx context.Context, remote net.Addr) []*pb.PeerInfo {
 	if c.PeerListProvider == nil {
 		return nil
 	}
-	return c.PeerListProvider()
+	peers, err := c.PeerListProvider(ctx)
+	if err != nil {
+		c.logf("p2p: %s: PeerListProvider failed, serving an empty peer list: %v", remote, err)
+		return nil
+	}
+	return peers
 }
 
 // Serve runs a minimal inbound P2P responder loop on listener until ctx is cancelled or
@@ -205,7 +222,7 @@ func handleResponderConn(ctx context.Context, conn net.Conn, cfg ResponderConfig
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			handleResponderSubstream(remote, stream, cfg)
+			handleResponderSubstream(ctx, remote, stream, cfg)
 		}()
 	}
 }
@@ -216,11 +233,14 @@ func handleResponderConn(ctx context.Context, conn net.Conn, cfg ResponderConfig
 // full get_peers RPC lifecycle -- see rpcpkg.ServeGetPeers's doc comment. Any other requested
 // protocol is NOT_SUPPORTED on the wire by that same call; either way, only this substream is
 // closed afterwards.
-func handleResponderSubstream(remote net.Addr, stream yamuxStream, cfg ResponderConfig) {
+//
+// ctx is passed through to cfg.PeerListProvider (see its doc comment) -- it is the connection's
+// ctx (ultimately Serve's ctx), not a per-substream-scoped one.
+func handleResponderSubstream(ctx context.Context, remote net.Addr, stream yamuxStream, cfg ResponderConfig) {
 	defer stream.Close()
 
 	transport := rpcpkg.NewStreamTransport(stream)
-	peers := cfg.knownPeers()
+	peers := cfg.knownPeers(ctx, remote)
 
 	if err := rpcpkg.ServeGetPeers(transport, peers); err != nil {
 		cfg.logf("p2p: %s: substream: %v", remote, err)

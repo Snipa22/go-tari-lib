@@ -112,8 +112,8 @@ func run() error {
 		StaticKeypair: staticKeypair,
 		OurFeatures:   p2p.FeaturesCommunicationNode,
 		OurAddresses:  ourAddresses,
-		PeerListProvider: func() []*pb.PeerInfo {
-			return store.List()
+		PeerListProvider: func(ctx context.Context) ([]*pb.PeerInfo, error) {
+			return store.List(), nil
 		},
 		OnPeerIdentity: func(remoteAddr net.Addr, peerStaticKey []byte, identity *p2p.PeerInfo) {
 			log.Printf("identity: peer=%x remote=%s features=%d user_agent=%q addresses=%v",
