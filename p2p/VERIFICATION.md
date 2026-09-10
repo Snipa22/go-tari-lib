@@ -769,3 +769,88 @@ already-verified `dialForProbe`.
   `ProbeChainMetadataWithOptions`/`ProbeGetPeersWithOptions` into go-tari-netmap's collector with
   a real `ProbeOptions.SocksProxyAddr` pointed at it -- both of which are explicitly out of scope
   for this pass.
+
+## Part G addendum (BRIEF2.md): identity-signature features/addresses parity bug + real address
+## advertising for the p2p-listener-responder-spike branch
+
+This continues the `feat/p2p-listener-responder-spike` branch (commit `bba3537`), which added
+`p2p/responder.go` (`Serve`) and `cmd/p2p-responder-spike/main.go`. That responder advertised
+`FeaturesCommunicationNode` via the (then brand-new) `IdentityOptions.Features`/`.Addresses`
+threaded through `ExchangeIdentityWithOptions` -- but Part D's `buildOurIdentitySignature` (see
+above) had its challenge construction HARDCODED to always sign `features=0`/no addresses,
+regardless of what `IdentityOptions` actually claimed. That was correct for every caller at the
+time Part D was written (nothing yet sent non-zero features/addresses), but became a real,
+exploitable protocol-parity bug the moment `p2p/responder.go` started sending
+`Features=FeaturesCommunicationNode` with a real signature underneath still only ever attesting
+to `features=0` -- exactly the mismatch `tari/comms/core/src/connection_manager/common.rs`'s
+`validate_peer_identity_message` (via `IdentitySignature::is_valid`/`construct_challenge`,
+`tari/comms/core/src/peer_manager/identity_signature.rs`) recomputes and checks on every real
+inbound connection.
+
+### The fix
+
+- **`p2p/identity_signature.go`**: `buildOurIdentitySignature` now takes `features uint32,
+  addresses [][]byte` directly (previously implicit/hardcoded) and threads them into a new,
+  factored-out `constructIdentitySignatureChallenge` helper that chains each claimed address (in
+  order) into the challenge, exactly mirroring Rust's `construct_challenge`:
+  `addresses.into_iter().fold(challenge, |challenge, addr| challenge.chain(addr))` -- confirmed
+  by re-fetching `tari/comms/core/src/peer_manager/identity_signature.rs` fresh (the "with
+  addresses" case Part D's own doc comment explicitly left unverified).
+- **New exported `VerifyIdentitySignature`** (`p2p/identity_signature.go`): an independent
+  implementation of the Schnorr verify equation (`s*G == R + e*P`,
+  `tari-crypto/src/signatures/schnorr.rs`'s `verify_raw_uniform`), reusable by both this
+  package's own tests and external callers/tests (`p2p/responder_test.go`) that need to confirm
+  a received signature actually matches a claimed features/addresses -- not just "no error".
+- **`p2p/identity.go`**: `ourPeerIdentityMsgBytes` now passes its own `features`/`addresses`
+  parameters straight through to `buildOurIdentitySignature`, instead of calling it with no
+  arguments.
+- **`p2p/multiaddr.go`** (new): confirmed, contrary to this task's own initial guess, that
+  `PeerIdentityMsg.Addresses`/the identity-signature challenge's per-address chain both carry
+  each address's raw BINARY rust-multiaddr wire encoding (`Multiaddr::to_vec`/`AsRef<[u8]>`,
+  `multiaddr = "0.18.2"` per `tari/comms/core/Cargo.toml`), NOT a UTF-8 multiaddr string --
+  confirmed by fetching `tari/comms/core/src/protocol/identity.rs`,
+  `tari/comms/core/src/connection_manager/common.rs`, and
+  `github.com/multiformats/rust-multiaddr`'s `src/lib.rs`/`src/protocol.rs`/`src/onion_addr.rs`
+  directly. This file implements just enough of that binary encoding
+  (`EncodeMultiaddrString`) to support the two multiaddr forms `cmd/p2p-responder-spike/main.go`
+  needs: `/ip4/<ipv4>/tcp/<port>` and `/onion3/<addr>:<port>`.
+- **`cmd/p2p-responder-spike/main.go`**: new `-public-tcp-addr`/`-onion3-addr` CLI flags (at
+  least one required, fails fast otherwise), parsed via `EncodeMultiaddrString` and threaded into
+  `ResponderConfig.OurAddresses` -- closing the "advertises COMMUNICATION_NODE with zero
+  addresses" gap `comms/dht/src/peer_validator.rs`'s `PeerHasNoAddresses`/
+  `PeerHasNoUsableAddresses` checks reject on the real network.
+
+### Byte-exact verified against real Tari Rust source (this pass)
+
+- `construct_challenge`'s per-address fold/chain step and its ordering -- confirmed by
+  re-fetching `tari/comms/core/src/peer_manager/identity_signature.rs`.
+- `Multiaddr`'s `AsRef<[u8]>`/`to_vec` binary representation, and the exact `Protocol::
+  write_bytes` byte layout for `Ip4`/`Tcp`/`Onion3` (protocol codes 4/6/445, unsigned-varint
+  LEB128 code + fixed-width payload) -- confirmed by fetching `rust-multiaddr`'s
+  `src/lib.rs`/`src/protocol.rs`/`src/onion_addr.rs` (the exact `multiaddr = "0.18.2"` version
+  `tari/comms/core/Cargo.toml` depends on) directly, and pinned as hand-computed golden byte
+  vectors in `p2p/multiaddr_test.go`.
+- `validate_peer_identity_message` parsing `PeerIdentityMsg.addresses` back via
+  `Multiaddr::try_from(Vec<u8>)` (the same raw bytes round-tripped, not re-encoded) -- confirmed
+  by fetching `tari/comms/core/src/connection_manager/common.rs` directly.
+- Strict backward compatibility for the zero-value case (`features=0`, no addresses, every
+  pre-existing `Probe`/`ProbeGetPeers`/`ProbeChainMetadata` caller): pinned via an
+  independently-computed golden challenge digest in
+  `p2p/identity_signature_test.go`'s `TestConstructIdentitySignatureChallengeZeroValueMatchesPreFixGoldenValue`.
+
+### Go-only, internally consistent, NOT independently cross-verified against a real Rust run
+
+- Same caveat as Part D above: the exact *value* of a produced signature for given inputs is not
+  compared against a real `tari_crypto`-computed signature (no Rust toolchain in this sandbox).
+  `VerifyIdentitySignature`'s independent Schnorr-equation check (and the live loopback rerun
+  below, against this repo's own client/responder) is what substitutes for that, same as Part D.
+
+### Live verification (loopback, this repo's own client against this repo's own responder binary)
+
+Reran the compiled `p2p-responder-spike` binary with `-public-tcp-addr /ip4/198.51.100.7/tcp/18189`
+against a fresh throwaway client using `p2p.Probe`/`p2p.ProbeGetPeersWithOptions`: identity
+exchange succeeded, the returned `PeerInfo.Addresses` matched the configured address in its real
+binary multiaddr encoding (`04c633640706470d` = ip4/198.51.100.7/tcp/18189 byte-for-byte), and
+`p2p.VerifyIdentitySignature` against the ACTUAL claimed `Features=3`/that address succeeded,
+while verification against the old hardcoded `features=0`/no-addresses claim correctly failed --
+see the branch's commit for the full transcript.

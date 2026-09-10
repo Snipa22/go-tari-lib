@@ -138,6 +138,94 @@ func TestServeEndToEndOverLoopback(t *testing.T) {
 	}
 }
 
+// TestServeAdvertisesConfiguredAddressesWithValidSignature is BRIEF2.md's "Finish the
+// advertising" integration test (point 2): starts a responder configured with a fake
+// /ip4/1.2.3.4/tcp/18189 address (ResponderConfig.OurAddresses, exactly as
+// cmd/p2p-responder-spike/main.go's -public-tcp-addr flag would wire it up -- see
+// parseAdvertisedAddresses there and p2p.EncodeMultiaddrString), dials it with a probing client,
+// and confirms:
+//
+//  1. The received PeerInfo.Addresses matches the configured address, in its real raw-binary
+//     rust-multiaddr wire encoding (p2p.EncodeMultiaddrString) -- NOT the address's UTF-8 string
+//     form.
+//  2. The received identity's IdentitySignature is cryptographically valid for the ACTUAL
+//     claimed features/addresses (via p2p.VerifyIdentitySignature, the same real
+//     Tari-equivalent Schnorr verification this repo's identity_signature_test.go tests exercise
+//     directly) -- proving BRIEF2.md's THE BUG fix actually reaches a live end-to-end exchange,
+//     not just the lower-level buildOurIdentitySignature unit tests.
+func TestServeAdvertisesConfiguredAddressesWithValidSignature(t *testing.T) {
+	wantAddr, err := p2p.EncodeMultiaddrString("/ip4/1.2.3.4/tcp/18189")
+	if err != nil {
+		t.Fatalf("EncodeMultiaddrString: %v", err)
+	}
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("starting loopback listener: %v", err)
+	}
+	defer listener.Close()
+
+	responderStatic, err := p2p.GenerateRistrettoKeypair()
+	if err != nil {
+		t.Fatalf("generating responder static keypair: %v", err)
+	}
+
+	cfg := p2p.ResponderConfig{
+		StaticKeypair: responderStatic,
+		OurFeatures:   p2p.FeaturesCommunicationNode,
+		OurAddresses:  [][]byte{wantAddr},
+		Logf:          t.Logf,
+	}
+
+	serveCtx, serveCancel := context.WithCancel(context.Background())
+	serveErrCh := make(chan error, 1)
+	go func() {
+		serveErrCh <- p2p.Serve(serveCtx, listener, cfg)
+	}()
+	defer func() {
+		serveCancel()
+		listener.Close()
+		<-serveErrCh
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	probeInfo, err := p2p.Probe(ctx, listener.Addr().String())
+	if err != nil {
+		t.Fatalf("Probe: %v", err)
+	}
+
+	if probeInfo.Features != p2p.FeaturesCommunicationNode {
+		t.Errorf("responder advertised Features = %d, want %d (FeaturesCommunicationNode)", probeInfo.Features, p2p.FeaturesCommunicationNode)
+	}
+	if len(probeInfo.Addresses) != 1 || !bytes.Equal(probeInfo.Addresses[0], wantAddr) {
+		t.Fatalf("responder advertised Addresses = %x, want [%x]", probeInfo.Addresses, wantAddr)
+	}
+
+	if probeInfo.IdentitySignature == nil {
+		t.Fatalf("responder sent no identity_signature")
+	}
+	valid, err := p2p.VerifyIdentitySignature(probeInfo.RemoteStaticPubKey, probeInfo.Features, probeInfo.Addresses, probeInfo.IdentitySignature)
+	if err != nil {
+		t.Fatalf("VerifyIdentitySignature: %v", err)
+	}
+	if !valid {
+		t.Fatalf("responder's identity_signature does not verify against its own claimed features=%d/addresses=%x -- this is exactly what a real Tari peer's validate_peer_identity_message checks and would reject the connection over", probeInfo.Features, probeInfo.Addresses)
+	}
+
+	// Sanity check the fix actually matters: verification against a DIFFERENT claimed features/
+	// addresses (e.g. what the old hardcoded-features=0/no-addresses bug would have signed
+	// instead) must fail.
+	tamperedValid, err := p2p.VerifyIdentitySignature(probeInfo.RemoteStaticPubKey, 0, nil, probeInfo.IdentitySignature)
+	if err != nil {
+		t.Fatalf("VerifyIdentitySignature (tampered claim): %v", err)
+	}
+	if tamperedValid {
+		t.Fatalf("responder's identity_signature incorrectly verified against features=0/no addresses (the pre-fix hardcoded claim)")
+	}
+}
+
 // TestServeEmptyPeerListProvider covers PeerListProvider == nil (Serve must serve an empty list,
 // not panic).
 func TestServeEmptyPeerListProvider(t *testing.T) {

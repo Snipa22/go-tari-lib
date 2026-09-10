@@ -49,11 +49,20 @@ const FeaturesCommunicationNode uint32 = 0b0000_0001 | 0b0000_0010
 type IdentityOptions struct {
 	// Features is the peer_features bitmask advertised in our outgoing PeerIdentityMsg.Features
 	// (source: tari/comms/core/src/peer_manager/peer_features.rs). See FeaturesCommunicationNode.
+	// This exact value is also chained into the outgoing IdentitySignature's challenge (see
+	// identity_signature.go's buildOurIdentitySignature) -- a real Tari peer recomputes that
+	// challenge from whatever Features it actually receives, so this MUST be the true claimed
+	// value, not a placeholder.
 	Features uint32
-	// Addresses is advertised in our outgoing PeerIdentityMsg.Addresses. nil/empty is fine (and
-	// is ExchangeIdentity's existing, unchanged behavior) -- a peer with no advertised reachable
-	// address is still valid, just not independently dialable by others from this identity
-	// message alone.
+	// Addresses is advertised in our outgoing PeerIdentityMsg.Addresses, and is ALSO chained
+	// (in this exact order) into the outgoing IdentitySignature's challenge, for the same reason
+	// as Features above. nil/empty is fine (and is ExchangeIdentity's existing, unchanged
+	// behavior) -- a peer with no advertised reachable address is still valid, just not
+	// independently dialable by others from this identity message alone.
+	//
+	// Each element MUST already be that address's raw BINARY rust-multiaddr wire encoding (see
+	// multiaddr.go's EncodeMultiaddrString), NOT a UTF-8 multiaddr string -- confirmed from real
+	// Tari source, see multiaddr.go's doc comment for the full chain of evidence.
 	Addresses [][]byte
 }
 
@@ -101,8 +110,15 @@ type PeerInfo struct {
 // (`PeerManagerError::MissingIdentitySignature`), aborting the connection immediately after
 // identity exchange -- before any Yamux traffic. That was a live-network-confirmed bug, not a
 // deliberate simplification; see p2p/VERIFICATION.md's "Part D addendum" for the full writeup.
+//
+// A LATER version of this function hardcoded the IdentitySignature's challenge to always sign
+// features=0/no addresses, even when features/addresses here were non-zero/non-empty (BRIEF2.md
+// "THE BUG") -- a real Tari peer recomputes the challenge from the features/addresses it
+// actually received in THIS message and rejects the connection (or worse, silently drops it) if
+// the signature doesn't match. buildOurIdentitySignature now takes features/addresses directly
+// so the signature always attests to exactly what this message claims.
 func ourPeerIdentityMsgBytes(staticKeypair noise.DHKey, features uint32, addresses [][]byte) ([]byte, error) {
-	sig, err := buildOurIdentitySignature(staticKeypair)
+	sig, err := buildOurIdentitySignature(staticKeypair, features, addresses)
 	if err != nil {
 		return nil, fmt.Errorf("p2p: building our own identity signature: %w", err)
 	}

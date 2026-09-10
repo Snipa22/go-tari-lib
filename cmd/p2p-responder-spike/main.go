@@ -6,6 +6,24 @@
 // blocksync -- see package p2p's Serve/ResponderConfig (p2p/responder.go) for what it actually
 // does, and p2p/rpc's ServeGetPeers (p2p/rpc/dht_getpeers_responder.go) for the get_peers wire
 // behavior.
+//
+// # Advertised addresses (BRIEF2.md "Finish the advertising")
+//
+// A COMMUNICATION_NODE peer that advertises ZERO addresses is exactly the case a real Tari
+// node's `comms/dht/src/peer_validator.rs` PeerHasNoAddresses/PeerHasNoUsableAddresses checks
+// reject -- so this binary now REQUIRES at least one advertised address, via two optional CLI
+// flags (at least one of which must be set, or this binary fails fast at startup rather than
+// silently running unreachable):
+//
+//	-public-tcp-addr /ip4/<public-ip>/tcp/<port>   e.g. -public-tcp-addr /ip4/203.0.113.7/tcp/18189
+//	-onion3-addr     /onion3/<addr>:<port>          e.g. -onion3-addr /onion3/abc...xyz:18189
+//
+// Both flags accept a full multiaddr string; each is parsed and re-encoded into the real,
+// byte-exact rust-multiaddr BINARY wire format (see p2p/multiaddr.go's EncodeMultiaddrString --
+// NOT a UTF-8 string -- this matters for both the outgoing PeerIdentityMsg.Addresses AND the
+// IdentitySignature challenge that now covers them, see p2p/identity_signature.go) before being
+// threaded into p2p.ResponderConfig.OurAddresses. Both may be set at once (e.g. a node reachable
+// over both clearnet and Tor); at least one is mandatory.
 package main
 
 import (
@@ -50,16 +68,24 @@ func main() {
 
 func run() error {
 	var (
-		addr    = flag.String("addr", ":18189", "TCP address to listen on (matches real Tari base node p2p port conventions by default)")
-		keyPath = flag.String("key", "", "path to a file holding our long-term Ristretto255 private key (32 raw bytes); if empty or the file doesn't exist, a fresh key is generated and, if -key was given, saved there for reuse across restarts")
+		addr          = flag.String("addr", ":18189", "TCP address to listen on (matches real Tari base node p2p port conventions by default)")
+		keyPath       = flag.String("key", "", "path to a file holding our long-term Ristretto255 private key (32 raw bytes); if empty or the file doesn't exist, a fresh key is generated and, if -key was given, saved there for reuse across restarts")
+		publicTCPAddr = flag.String("public-tcp-addr", "", "our own publicly-dialable clearnet multiaddr to advertise, e.g. /ip4/203.0.113.7/tcp/18189 (optional, but at least one of -public-tcp-addr/-onion3-addr is REQUIRED -- a COMMUNICATION_NODE peer with zero advertised addresses is rejected by real Tari nodes' peer validation)")
+		onion3Addr    = flag.String("onion3-addr", "", "our own onion-v3 multiaddr to advertise, e.g. /onion3/<56-char-base32-addr>:18189 (optional, but at least one of -public-tcp-addr/-onion3-addr is REQUIRED, see -public-tcp-addr)")
 	)
 	flag.Parse()
+
+	ourAddresses, err := parseAdvertisedAddresses(*publicTCPAddr, *onion3Addr)
+	if err != nil {
+		return err
+	}
 
 	staticKeypair, err := loadOrGenerateKeypair(*keyPath)
 	if err != nil {
 		return fmt.Errorf("setting up static keypair: %w", err)
 	}
 	log.Printf("main: our static public key: %x", staticKeypair.Public)
+	log.Printf("main: advertising %d address(es): public-tcp=%q onion3=%q", len(ourAddresses), *publicTCPAddr, *onion3Addr)
 
 	listener, err := net.Listen("tcp", *addr)
 	if err != nil {
@@ -85,6 +111,7 @@ func run() error {
 	cfg := p2p.ResponderConfig{
 		StaticKeypair: staticKeypair,
 		OurFeatures:   p2p.FeaturesCommunicationNode,
+		OurAddresses:  ourAddresses,
 		PeerListProvider: func() []*pb.PeerInfo {
 			return store.List()
 		},
@@ -102,6 +129,37 @@ func run() error {
 	}
 	log.Printf("main: responder loop exited cleanly")
 	return nil
+}
+
+// parseAdvertisedAddresses validates and encodes this binary's -public-tcp-addr/-onion3-addr
+// flag values into the raw binary rust-multiaddr wire encoding p2p.ResponderConfig.OurAddresses
+// expects (see p2p/multiaddr.go's EncodeMultiaddrString doc comment for exactly why that, and
+// not a UTF-8 string, is required). At least one of the two flags MUST be non-empty -- fails
+// fast with a clear error otherwise, rather than silently starting an unreachable
+// COMMUNICATION_NODE peer (BRIEF2.md "Finish the advertising", point 1: real Tari nodes'
+// comms/dht/src/peer_validator.rs PeerHasNoAddresses/PeerHasNoUsableAddresses checks reject a
+// peer with zero advertised addresses).
+func parseAdvertisedAddresses(publicTCPAddr, onion3Addr string) ([][]byte, error) {
+	if publicTCPAddr == "" && onion3Addr == "" {
+		return nil, fmt.Errorf("at least one of -public-tcp-addr or -onion3-addr must be set: a COMMUNICATION_NODE peer with no advertised addresses is rejected by real Tari nodes' peer validation and would start unreachable")
+	}
+
+	var out [][]byte
+	if publicTCPAddr != "" {
+		encoded, err := p2p.EncodeMultiaddrString(publicTCPAddr)
+		if err != nil {
+			return nil, fmt.Errorf("-public-tcp-addr %q: %w", publicTCPAddr, err)
+		}
+		out = append(out, encoded)
+	}
+	if onion3Addr != "" {
+		encoded, err := p2p.EncodeMultiaddrString(onion3Addr)
+		if err != nil {
+			return nil, fmt.Errorf("-onion3-addr %q: %w", onion3Addr, err)
+		}
+		out = append(out, encoded)
+	}
+	return out, nil
 }
 
 // keyFileSize is the size, in bytes, of the file loadOrGenerateKeypair reads/writes: the 32-byte
