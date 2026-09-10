@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.4.0](https://github.com/Snipa22/go-tari-lib/compare/v1.3.0...v1.4.0) (2026-09-10)
+
+
+### Features
+
+* **p2p:** add minimal inbound P2P responder + get_peers server ([bba3537](https://github.com/Snipa22/go-tari-lib/commit/bba3537db075ced29fbeec09f479c8f0a0d33e25))
+
+
+### Bug Fixes
+
+* **p2p:** correct Esmeralda/NextNet wire bytes to match Network::as_wire_byte() ([5e3a408](https://github.com/Snipa22/go-tari-lib/commit/5e3a40805505ae3292138ca0e10b0d5cb4a56d1a))
+* **p2p:** sign real claimed features/addresses in identity signature, advertise real addresses ([835277d](https://github.com/Snipa22/go-tari-lib/commit/835277d000dab0a9f35b65bbf42b29d6fbc7ff57))
+
 ## [1.3.0](https://github.com/Snipa22/go-tari-lib/compare/v1.2.0...v1.3.0) (2026-08-23)
 
 
