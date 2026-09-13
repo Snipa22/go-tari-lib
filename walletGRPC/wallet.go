@@ -118,3 +118,83 @@ func GetAddresses() (*tari_generated.GetCompleteAddressResponse, error) {
 	client := tari_generated.NewWalletClient(grpcConn)
 	return client.GetCompleteAddress(context.Background(), nil)
 }
+
+// Identify wraps the Identify GRPC call, returning the wallet node's identity information.
+func Identify() (*tari_generated.GetIdentityResponse, error) {
+	client := tari_generated.NewWalletClient(grpcConn)
+	return client.Identify(context.Background(), &tari_generated.GetIdentityRequest{})
+}
+
+// GetPaymentIdAddress wraps the GetPaymentIdAddress GRPC call, resolving the wallet address
+// tied to a given payment ID (order reference string).
+func GetPaymentIdAddress(paymentID string) (*tari_generated.GetCompleteAddressResponse, error) {
+	client := tari_generated.NewWalletClient(grpcConn)
+	return client.GetPaymentIdAddress(context.Background(), &tari_generated.GetPaymentIdAddressRequest{
+		PaymentId: []byte(paymentID),
+	})
+}
+
+// GetCompletedTransactionsByPaymentID wraps the GetCompletedTransactions GRPC call, filtering
+// to transactions tagged with the given payment ID (order reference string), and drains the
+// resulting stream into a slice.
+func GetCompletedTransactionsByPaymentID(paymentID string) ([]*tari_generated.TransactionInfo, error) {
+	client := tari_generated.NewWalletClient(grpcConn)
+	completedTxnsClient, err := client.GetCompletedTransactions(context.Background(), &tari_generated.GetCompletedTransactionsRequest{
+		PaymentId: &tari_generated.UserPaymentId{Utf8String: paymentID},
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	resp := make([]*tari_generated.TransactionInfo, 0)
+	for {
+		txnResp, err := completedTxnsClient.Recv()
+		if err != nil {
+			if err == io.EOF {
+				return resp, nil
+			}
+			return nil, err
+		}
+		resp = append(resp, txnResp.Transaction)
+	}
+}
+
+// StreamTransactionEvents wraps the StreamTransactionEvents GRPC call. It forwards each event
+// received off the stream onto the returned event channel, and forwards any terminal error
+// (other than a clean io.EOF) onto the returned error channel. Both channels are closed when
+// the stream ends. Callers should cancel ctx to stop the stream; the underlying goroutine exits
+// cleanly once Recv() surfaces the resulting cancellation error.
+func StreamTransactionEvents(ctx context.Context) (<-chan *tari_generated.TransactionEventResponse, <-chan error) {
+	client := tari_generated.NewWalletClient(grpcConn)
+	events := make(chan *tari_generated.TransactionEventResponse, 16)
+	errs := make(chan error, 1)
+
+	stream, err := client.StreamTransactionEvents(ctx, &tari_generated.TransactionEventRequest{})
+	if err != nil {
+		errs <- err
+		close(events)
+		close(errs)
+		return events, errs
+	}
+
+	go func() {
+		defer close(events)
+		defer close(errs)
+		for {
+			event, err := stream.Recv()
+			if err != nil {
+				if err != io.EOF {
+					errs <- err
+				}
+				return
+			}
+			select {
+			case events <- event:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
+	return events, errs
+}
