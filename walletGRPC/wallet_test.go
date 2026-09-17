@@ -32,6 +32,23 @@ type fakeWalletServer struct {
 
 	streamEvents  []*tari_generated.TransactionEvent
 	streamSendGap time.Duration
+
+	balanceResp *tari_generated.GetBalanceResponse
+
+	// transferFn lets tests customize the Transfer RPC's behavior (return value/error) without
+	// needing a separate server implementation per SendTransactions test scenario.
+	transferFn func(ctx context.Context, req *tari_generated.TransferRequest) (*tari_generated.TransferResponse, error)
+}
+
+func (f *fakeWalletServer) GetBalance(ctx context.Context, in *tari_generated.GetBalanceRequest) (*tari_generated.GetBalanceResponse, error) {
+	return f.balanceResp, nil
+}
+
+func (f *fakeWalletServer) Transfer(ctx context.Context, in *tari_generated.TransferRequest) (*tari_generated.TransferResponse, error) {
+	if f.transferFn != nil {
+		return f.transferFn(ctx, in)
+	}
+	return &tari_generated.TransferResponse{}, nil
 }
 
 func (f *fakeWalletServer) Identify(ctx context.Context, in *tari_generated.GetIdentityRequest) (*tari_generated.GetIdentityResponse, error) {
