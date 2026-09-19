@@ -1,5 +1,16 @@
 # Changelog
 
+## [3.0.0](https://github.com/Snipa22/go-tari-lib/compare/v2.0.0...v3.0.0) (2026-09-19)
+
+
+### ⚠ BREAKING CHANGES
+
+* add singleTx parameter to (*Client).SendTransactions
+
+### Features
+
+* add singleTx parameter to (*Client).SendTransactions ([9723ecb](https://github.com/Snipa22/go-tari-lib/commit/9723ecbd1fd8c882ecf9c0d20f4e4e04a55bc74f))
+
 ## [2.0.0](https://github.com/Snipa22/go-tari-lib/compare/v1.3.0...v2.0.0) (2026-09-19)
 
 
