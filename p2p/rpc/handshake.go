@@ -3,7 +3,7 @@ package rpc
 import (
 	"fmt"
 
-	rpcpb "github.com/Snipa22/go-tari-lib/p2p/proto"
+	rpcpb "github.com/Snipa22/go-tari-lib/v2/p2p/proto"
 	googleproto "google.golang.org/protobuf/proto"
 )
 

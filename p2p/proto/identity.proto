@@ -6,7 +6,7 @@ syntax = "proto3";
 
 package tari.comms.identity;
 
-option go_package = "github.com/Snipa22/go-tari-lib/p2p/proto";
+option go_package = "github.com/Snipa22/go-tari-lib/v2/p2p/proto";
 
 message PeerIdentityMsg {
     repeated bytes addresses = 1;
