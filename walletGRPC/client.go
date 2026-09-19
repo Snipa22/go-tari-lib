@@ -84,7 +84,9 @@ func classifyTransferErr(err error) error {
 	}
 }
 
-// SendTransactions sends transactions to the wallet via the Transfer RPC.
+// SendTransactions sends transactions to the wallet via the Transfer RPC. singleTx controls
+// whether the recipients are broadcast as a single on-chain transaction/kernel with N outputs
+// (true), or as N independent transactions, one per recipient (false).
 //
 // IMPORTANT: err == nil does NOT mean every recipient succeeded. The wallet's Transfer RPC
 // reports success/failure per recipient in resp.Results ([]*tari_generated.TransferResult);
@@ -101,10 +103,11 @@ func classifyTransferErr(err error) error {
 // that case. Any other error (including codes.InvalidArgument) is returned as-is: those cases
 // are safe to retry or fail fast, since the wallet either rejected the request outright or never
 // received it.
-func (c *Client) SendTransactions(ctx context.Context, transactions []*tari_generated.PaymentRecipient) (*tari_generated.TransferResponse, error) {
+func (c *Client) SendTransactions(ctx context.Context, transactions []*tari_generated.PaymentRecipient, singleTx bool) (*tari_generated.TransferResponse, error) {
 	client := tari_generated.NewWalletClient(c.conn)
 	resp, err := client.Transfer(ctx, &tari_generated.TransferRequest{
 		Recipients: transactions,
+		SingleTx:   singleTx,
 	})
 	if err != nil {
 		return resp, classifyTransferErr(err)
