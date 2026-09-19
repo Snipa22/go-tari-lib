@@ -11,7 +11,7 @@ syntax = "proto3";
 
 package tari.base_node;
 
-option go_package = "github.com/Snipa22/go-tari-lib/p2p/proto";
+option go_package = "github.com/Snipa22/go-tari-lib/v2/p2p/proto";
 
 message ChainMetadata {
     uint64 best_block_height = 1;

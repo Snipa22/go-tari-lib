@@ -6,8 +6,8 @@ import (
 
 	"github.com/hashicorp/yamux"
 
-	pb "github.com/Snipa22/go-tari-lib/p2p/proto"
-	rpcpkg "github.com/Snipa22/go-tari-lib/p2p/rpc"
+	pb "github.com/Snipa22/go-tari-lib/v2/p2p/proto"
+	rpcpkg "github.com/Snipa22/go-tari-lib/v2/p2p/rpc"
 )
 
 // DefaultGetPeersRequest returns a bounded, conservative default set of get_peers parameters:

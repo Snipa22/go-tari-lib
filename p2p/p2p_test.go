@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Snipa22/go-tari-lib/p2p"
+	"github.com/Snipa22/go-tari-lib/v2/p2p"
 )
 
 // pipeConn adapts a net.Pipe() half (which has no deadline/wire-byte-write concept issues, but

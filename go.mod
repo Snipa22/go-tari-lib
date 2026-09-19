@@ -1,4 +1,4 @@
-module github.com/Snipa22/go-tari-lib
+module github.com/Snipa22/go-tari-lib/v2
 
 go 1.24.0
 

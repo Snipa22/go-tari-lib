@@ -42,8 +42,8 @@ import (
 
 	"github.com/flynn/noise"
 
-	"github.com/Snipa22/go-tari-lib/p2p"
-	pb "github.com/Snipa22/go-tari-lib/p2p/proto"
+	"github.com/Snipa22/go-tari-lib/v2/p2p"
+	pb "github.com/Snipa22/go-tari-lib/v2/p2p/proto"
 )
 
 // seenPeerWindow is how long a peer we've connected to (inbound or outbound) or exchanged
