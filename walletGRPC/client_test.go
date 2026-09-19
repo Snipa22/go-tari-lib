@@ -187,6 +187,15 @@ func TestClient_GetBalances(t *testing.T) {
 	}
 }
 
+// NOTE: TestSendTransactions_AmbiguousBroadcastErrors, TestSendTransactions_NonAmbiguousErrorPassesThrough,
+// TestSendTransactions_NilErrorWithMixedResults, and TestSendTransactions_RespectsContextCancellation
+// below all pass singleTx=false to (*Client).SendTransactions. That value is arbitrary/irrelevant
+// for their purposes: they exercise transport-error classification and ctx plumbing, not
+// singleTx batching behavior, and none of them assert on the SingleTx field the fake server
+// received. Dedicated coverage for singleTx actually reaching the TransferRequest lives in
+// TestClient_SendTransactions_SingleTxFalse and TestClient_SendTransactions_SingleTxTrue below,
+// mirroring the deprecated function's TestSendTransactions_SingleTxFalse/True in wallet_test.go.
+
 // TestSendTransactions_AmbiguousBroadcastErrors verifies that DeadlineExceeded, Unavailable, and
 // Canceled transport errors from the underlying Transfer RPC all get wrapped in
 // ErrAmbiguousBroadcast, and that the original gRPC error remains inspectable via errors.Unwrap.
@@ -209,7 +218,7 @@ func TestSendTransactions_AmbiguousBroadcastErrors(t *testing.T) {
 				},
 			})
 
-			_, err := c.SendTransactions(context.Background(), nil)
+			_, err := c.SendTransactions(context.Background(), nil, false)
 			if err == nil {
 				t.Fatal("SendTransactions returned nil error, want an ambiguous-broadcast error")
 			}
@@ -240,7 +249,7 @@ func TestSendTransactions_NonAmbiguousErrorPassesThrough(t *testing.T) {
 		},
 	})
 
-	_, err := c.SendTransactions(context.Background(), nil)
+	_, err := c.SendTransactions(context.Background(), nil, false)
 	if err == nil {
 		t.Fatal("SendTransactions returned nil error, want an InvalidArgument error")
 	}
@@ -270,7 +279,7 @@ func TestSendTransactions_NilErrorWithMixedResults(t *testing.T) {
 		},
 	})
 
-	resp, err := c.SendTransactions(context.Background(), nil)
+	resp, err := c.SendTransactions(context.Background(), nil, false)
 	if err != nil {
 		t.Fatalf("SendTransactions returned unexpected error: %v", err)
 	}
@@ -296,7 +305,7 @@ func TestSendTransactions_RespectsContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	_, err := c.SendTransactions(ctx, nil)
+	_, err := c.SendTransactions(ctx, nil, false)
 	if err == nil {
 		t.Fatal("SendTransactions with an already-canceled context returned nil error, want a cancellation error")
 	}
@@ -308,6 +317,80 @@ func TestSendTransactions_RespectsContextCancellation(t *testing.T) {
 	// A canceled context is exactly the ambiguous case per the classification rules.
 	if !errors.Is(err, ErrAmbiguousBroadcast) {
 		t.Errorf("errors.Is(err, ErrAmbiguousBroadcast) = false, want true for a canceled-context error (err: %v)", err)
+	}
+}
+
+// TestClient_SendTransactions_SingleTxFalse verifies that calling (*Client).SendTransactions
+// with singleTx=false produces a TransferRequest with SingleTx: false and the given recipients,
+// as observed by the fake server's transferFn. Mirrors the deprecated package-level function's
+// TestSendTransactions_SingleTxFalse in wallet_test.go, adapted for the ctx-taking Client method.
+func TestClient_SendTransactions_SingleTxFalse(t *testing.T) {
+	var gotReq *tari_generated.TransferRequest
+	c := newBufconnClient(t, &fakeWalletServer{
+		transferFn: func(ctx context.Context, req *tari_generated.TransferRequest) (*tari_generated.TransferResponse, error) {
+			gotReq = req
+			return &tari_generated.TransferResponse{}, nil
+		},
+	})
+
+	recipients := []*tari_generated.PaymentRecipient{
+		{Address: "addr-1", Amount: 100},
+		{Address: "addr-2", Amount: 200},
+	}
+
+	_, err := c.SendTransactions(context.Background(), recipients, false)
+	if err != nil {
+		t.Fatalf("SendTransactions returned unexpected error: %v", err)
+	}
+	if gotReq == nil {
+		t.Fatal("server never recorded a TransferRequest")
+	}
+	if gotReq.GetSingleTx() != false {
+		t.Errorf("req.SingleTx = %v, want false", gotReq.GetSingleTx())
+	}
+	if len(gotReq.GetRecipients()) != 2 {
+		t.Fatalf("len(req.Recipients) = %d, want 2", len(gotReq.GetRecipients()))
+	}
+	if gotReq.GetRecipients()[0].GetAddress() != "addr-1" || gotReq.GetRecipients()[1].GetAddress() != "addr-2" {
+		t.Errorf("req.Recipients addresses = %q, %q, want %q, %q",
+			gotReq.GetRecipients()[0].GetAddress(), gotReq.GetRecipients()[1].GetAddress(), "addr-1", "addr-2")
+	}
+}
+
+// TestClient_SendTransactions_SingleTxTrue verifies that calling (*Client).SendTransactions
+// with singleTx=true produces a TransferRequest with SingleTx: true and the given recipients,
+// as observed by the fake server's transferFn. Mirrors the deprecated package-level function's
+// TestSendTransactions_SingleTxTrue in wallet_test.go, adapted for the ctx-taking Client method.
+func TestClient_SendTransactions_SingleTxTrue(t *testing.T) {
+	var gotReq *tari_generated.TransferRequest
+	c := newBufconnClient(t, &fakeWalletServer{
+		transferFn: func(ctx context.Context, req *tari_generated.TransferRequest) (*tari_generated.TransferResponse, error) {
+			gotReq = req
+			return &tari_generated.TransferResponse{}, nil
+		},
+	})
+
+	recipients := []*tari_generated.PaymentRecipient{
+		{Address: "addr-1", Amount: 100},
+		{Address: "addr-2", Amount: 200},
+	}
+
+	_, err := c.SendTransactions(context.Background(), recipients, true)
+	if err != nil {
+		t.Fatalf("SendTransactions returned unexpected error: %v", err)
+	}
+	if gotReq == nil {
+		t.Fatal("server never recorded a TransferRequest")
+	}
+	if gotReq.GetSingleTx() != true {
+		t.Errorf("req.SingleTx = %v, want true", gotReq.GetSingleTx())
+	}
+	if len(gotReq.GetRecipients()) != 2 {
+		t.Fatalf("len(req.Recipients) = %d, want 2", len(gotReq.GetRecipients()))
+	}
+	if gotReq.GetRecipients()[0].GetAddress() != "addr-1" || gotReq.GetRecipients()[1].GetAddress() != "addr-2" {
+		t.Errorf("req.Recipients addresses = %q, %q, want %q, %q",
+			gotReq.GetRecipients()[0].GetAddress(), gotReq.GetRecipients()[1].GetAddress(), "addr-1", "addr-2")
 	}
 }
 
