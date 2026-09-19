@@ -1,5 +1,16 @@
 # Changelog
 
+## [4.0.0](https://github.com/Snipa22/go-tari-lib/compare/v3.0.0...v4.0.0) (2026-09-19)
+
+
+### ⚠ BREAKING CHANGES
+
+* correct module path to /v3 for major version 3 compliance
+
+### Bug Fixes
+
+* correct module path to /v3 for major version 3 compliance ([f9481af](https://github.com/Snipa22/go-tari-lib/commit/f9481af1b46a7dc5abf32ec4984f6d88a92a5a4f))
+
 ## [3.0.0](https://github.com/Snipa22/go-tari-lib/compare/v2.0.0...v3.0.0) (2026-09-19)
 
 
