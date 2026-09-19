@@ -40,7 +40,9 @@ func InitWalletGRPC(walletAddress string) {
 	grpcConn, _ = grpc.NewClient(grpcWalletAddress, opts...)
 }
 
-// SendTransactions sends the transactions to the wallet.
+// SendTransactions sends the transactions to the wallet. singleTx controls whether the
+// recipients are broadcast as a single on-chain transaction/kernel with N outputs (true), or as
+// N independent transactions, one per recipient (false).
 //
 // WARNING: err == nil does NOT mean every recipient succeeded — this deprecated function returns
 // the raw TransferResponse with zero classification of per-recipient failures or of ambiguous
@@ -50,10 +52,11 @@ func InitWalletGRPC(walletAddress string) {
 //
 // Deprecated: uses the unsafe package-level shared connection and hardcodes context.Background()
 // (uncancellable, no caller timeout). Use (*Client).SendTransactions instead.
-func SendTransactions(transactions []*tari_generated.PaymentRecipient) (*tari_generated.TransferResponse, error) {
+func SendTransactions(transactions []*tari_generated.PaymentRecipient, singleTx bool) (*tari_generated.TransferResponse, error) {
 	client := tari_generated.NewWalletClient(grpcConn)
 	return client.Transfer(context.Background(), &tari_generated.TransferRequest{
 		Recipients: transactions,
+		SingleTx:   singleTx,
 	})
 }
 
