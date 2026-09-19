@@ -187,7 +187,7 @@ const file_p2p_proto_identity_proto_rawDesc = "" +
 	"\tsignature\x18\x02 \x01(\fR\tsignature\x12!\n" +
 	"\fpublic_nonce\x18\x03 \x01(\fR\vpublicNonce\x12\x1d\n" +
 	"\n" +
-	"updated_at\x18\x04 \x01(\x03R\tupdatedAtB-Z+github.com/Snipa22/go-tari-lib/v2/p2p/protob\x06proto3"
+	"updated_at\x18\x04 \x01(\x03R\tupdatedAtB-Z+github.com/Snipa22/go-tari-lib/v3/p2p/protob\x06proto3"
 
 var (
 	file_p2p_proto_identity_proto_rawDescOnce sync.Once

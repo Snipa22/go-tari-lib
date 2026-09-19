@@ -6,7 +6,7 @@ syntax = "proto3";
 
 package tari.comms.rpc;
 
-option go_package = "github.com/Snipa22/go-tari-lib/v2/p2p/proto";
+option go_package = "github.com/Snipa22/go-tari-lib/v3/p2p/proto";
 
 message RpcRequest {
     uint32 request_id = 1;

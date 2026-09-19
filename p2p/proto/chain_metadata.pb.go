@@ -126,7 +126,7 @@ const file_p2p_proto_chain_metadata_proto_rawDesc = "" +
 	"\x1aaccumulated_difficulty_low\x18\x05 \x01(\fR\x18accumulatedDifficultyLow\x12>\n" +
 	"\x1baccumulated_difficulty_high\x18\b \x01(\fR\x19accumulatedDifficultyHigh\x12#\n" +
 	"\rpruned_height\x18\x06 \x01(\x04R\fprunedHeight\x12\x1c\n" +
-	"\ttimestamp\x18\a \x01(\x04R\ttimestampB-Z+github.com/Snipa22/go-tari-lib/v2/p2p/protob\x06proto3"
+	"\ttimestamp\x18\a \x01(\x04R\ttimestampB-Z+github.com/Snipa22/go-tari-lib/v3/p2p/protob\x06proto3"
 
 var (
 	file_p2p_proto_chain_metadata_proto_rawDescOnce sync.Once

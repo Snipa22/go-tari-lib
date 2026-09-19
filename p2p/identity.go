@@ -8,7 +8,7 @@ import (
 	"github.com/flynn/noise"
 	googleproto "google.golang.org/protobuf/proto"
 
-	identitypb "github.com/Snipa22/go-tari-lib/v2/p2p/proto"
+	identitypb "github.com/Snipa22/go-tari-lib/v3/p2p/proto"
 )
 
 // identityProtocolMajorVersion is the single version byte sent in every identity protocol frame

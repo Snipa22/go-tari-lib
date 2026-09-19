@@ -22,7 +22,7 @@ package tari.dht.rpc;
 
 import "p2p/proto/identity.proto";
 
-option go_package = "github.com/Snipa22/go-tari-lib/v2/p2p/proto";
+option go_package = "github.com/Snipa22/go-tari-lib/v3/p2p/proto";
 
 message GetPeersRequest {
     uint32 n = 1;
