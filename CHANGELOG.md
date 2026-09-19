@@ -1,5 +1,25 @@
 # Changelog
 
+## [2.0.0](https://github.com/Snipa22/go-tari-lib/compare/v1.3.0...v2.0.0) (2026-09-19)
+
+
+### ⚠ BREAKING CHANGES
+
+* **walletGRPC:** SendTransactions(transactions) is now SendTransactions(transactions, singleTx) -- existing callers of this exported package-level function must add a bool argument (false to preserve prior behavior exactly).
+
+### Features
+
+* **p2p:** add minimal inbound P2P responder + get_peers server ([bba3537](https://github.com/Snipa22/go-tari-lib/commit/bba3537db075ced29fbeec09f479c8f0a0d33e25))
+* **walletGRPC:** add payment-gateway RPC wrappers (Identify, GetPaymentIdAddress, GetCompletedTransactionsByPaymentID, StreamTransactionEvents) ([def1189](https://github.com/Snipa22/go-tari-lib/commit/def118969dbc9e3d6cde61418969f706b12ca3c2))
+* **walletGRPC:** add per-connection Client type with ctx-plumbed RPCs, classify ambiguous broadcast errors ([7175ac9](https://github.com/Snipa22/go-tari-lib/commit/7175ac988eebeb0ad0e178a31bcb6fb26b9e9937))
+* **walletGRPC:** add singleTx batching to deprecated SendTransactions ([13b58fd](https://github.com/Snipa22/go-tari-lib/commit/13b58fd214bcfcc3aadc81de8d0f0abca41e7fbd))
+
+
+### Bug Fixes
+
+* **p2p:** correct Esmeralda/NextNet wire bytes to match Network::as_wire_byte() ([5e3a408](https://github.com/Snipa22/go-tari-lib/commit/5e3a40805505ae3292138ca0e10b0d5cb4a56d1a))
+* **p2p:** sign real claimed features/addresses in identity signature, advertise real addresses ([835277d](https://github.com/Snipa22/go-tari-lib/commit/835277d000dab0a9f35b65bbf42b29d6fbc7ff57))
+
 ## [1.3.0](https://github.com/Snipa22/go-tari-lib/compare/v1.2.0...v1.3.0) (2026-08-23)
 
 
