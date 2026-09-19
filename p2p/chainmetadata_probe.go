@@ -7,7 +7,7 @@ import (
 
 	"github.com/hashicorp/yamux"
 
-	rpcpkg "github.com/Snipa22/go-tari-lib/v2/p2p/rpc"
+	rpcpkg "github.com/Snipa22/go-tari-lib/v3/p2p/rpc"
 )
 
 // ChainMetadataInfo is the result of a successful ProbeChainMetadata call: the peer's decoded

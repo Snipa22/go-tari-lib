@@ -393,7 +393,7 @@ const file_p2p_proto_rpc_proto_rawDesc = "" +
 	"4HANDSHAKE_REJECT_REASON_NO_SERVER_SESSIONS_AVAILABLE\x10\x02\x128\n" +
 	"4HANDSHAKE_REJECT_REASON_NO_CLIENT_SESSIONS_AVAILABLE\x10\x03\x122\n" +
 	".HANDSHAKE_REJECT_REASON_PROTOCOL_NOT_SUPPORTED\x10\x04B\x10\n" +
-	"\x0esession_resultB-Z+github.com/Snipa22/go-tari-lib/v2/p2p/protob\x06proto3"
+	"\x0esession_resultB-Z+github.com/Snipa22/go-tari-lib/v3/p2p/protob\x06proto3"
 
 var (
 	file_p2p_proto_rpc_proto_rawDescOnce sync.Once

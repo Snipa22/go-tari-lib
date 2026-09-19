@@ -287,7 +287,7 @@ const file_p2p_proto_dht_rpc_proto_rawDesc = "" +
 	"\x11PeerIdentityClaim\x12\x1c\n" +
 	"\taddresses\x18\x01 \x03(\fR\taddresses\x12#\n" +
 	"\rpeer_features\x18\x02 \x01(\rR\fpeerFeatures\x12U\n" +
-	"\x12identity_signature\x18\x03 \x01(\v2&.tari.comms.identity.IdentitySignatureR\x11identitySignatureB-Z+github.com/Snipa22/go-tari-lib/v2/p2p/protob\x06proto3"
+	"\x12identity_signature\x18\x03 \x01(\v2&.tari.comms.identity.IdentitySignatureR\x11identitySignatureB-Z+github.com/Snipa22/go-tari-lib/v3/p2p/protob\x06proto3"
 
 var (
 	file_p2p_proto_dht_rpc_proto_rawDescOnce sync.Once
