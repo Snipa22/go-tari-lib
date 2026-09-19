@@ -5,10 +5,11 @@ go 1.24.0
 toolchain go1.24.13
 
 require (
-	github.com/Snipa22/go-tari-grpc-lib/v3 v3.2.0
+	github.com/Snipa22/go-tari-grpc-lib/v3 v3.2.1-0.20260816155812-abc39e19311d
 	github.com/flynn/noise v1.1.0
 	github.com/gtank/ristretto255 v0.2.0
 	github.com/hashicorp/yamux v0.1.2
+	github.com/mr-tron/base58 v1.3.0
 	golang.org/x/crypto v0.44.0
 	golang.org/x/net v0.46.0
 	google.golang.org/grpc v1.72.0
@@ -17,7 +18,6 @@ require (
 
 require (
 	filippo.io/edwards25519 v1.1.0 // indirect
-	github.com/mr-tron/base58 v1.3.0 // indirect
 	golang.org/x/sys v0.38.0 // indirect
 	golang.org/x/text v0.31.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20250218202821-56aae31c358a // indirect

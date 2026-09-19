@@ -181,6 +181,78 @@ func TestGetPaymentIdAddress_SendsUtf8PaymentIDAndReturnsResponse(t *testing.T) 
 	}
 }
 
+// TestSendTransactions_SingleTxFalse verifies that calling the deprecated package-level
+// SendTransactions with singleTx=false produces a TransferRequest with SingleTx: false and the
+// given recipients, as observed by the fake server's transferFn.
+func TestSendTransactions_SingleTxFalse(t *testing.T) {
+	var gotReq *tari_generated.TransferRequest
+	startFakeWallet(t, &fakeWalletServer{
+		transferFn: func(ctx context.Context, req *tari_generated.TransferRequest) (*tari_generated.TransferResponse, error) {
+			gotReq = req
+			return &tari_generated.TransferResponse{}, nil
+		},
+	})
+
+	recipients := []*tari_generated.PaymentRecipient{
+		{Address: "addr-1", Amount: 100},
+		{Address: "addr-2", Amount: 200},
+	}
+
+	_, err := SendTransactions(recipients, false)
+	if err != nil {
+		t.Fatalf("SendTransactions returned unexpected error: %v", err)
+	}
+	if gotReq == nil {
+		t.Fatal("server never recorded a TransferRequest")
+	}
+	if gotReq.GetSingleTx() != false {
+		t.Errorf("req.SingleTx = %v, want false", gotReq.GetSingleTx())
+	}
+	if len(gotReq.GetRecipients()) != 2 {
+		t.Fatalf("len(req.Recipients) = %d, want 2", len(gotReq.GetRecipients()))
+	}
+	if gotReq.GetRecipients()[0].GetAddress() != "addr-1" || gotReq.GetRecipients()[1].GetAddress() != "addr-2" {
+		t.Errorf("req.Recipients addresses = %q, %q, want %q, %q",
+			gotReq.GetRecipients()[0].GetAddress(), gotReq.GetRecipients()[1].GetAddress(), "addr-1", "addr-2")
+	}
+}
+
+// TestSendTransactions_SingleTxTrue verifies that calling the deprecated package-level
+// SendTransactions with singleTx=true produces a TransferRequest with SingleTx: true and the
+// given recipients, as observed by the fake server's transferFn.
+func TestSendTransactions_SingleTxTrue(t *testing.T) {
+	var gotReq *tari_generated.TransferRequest
+	startFakeWallet(t, &fakeWalletServer{
+		transferFn: func(ctx context.Context, req *tari_generated.TransferRequest) (*tari_generated.TransferResponse, error) {
+			gotReq = req
+			return &tari_generated.TransferResponse{}, nil
+		},
+	})
+
+	recipients := []*tari_generated.PaymentRecipient{
+		{Address: "addr-1", Amount: 100},
+		{Address: "addr-2", Amount: 200},
+	}
+
+	_, err := SendTransactions(recipients, true)
+	if err != nil {
+		t.Fatalf("SendTransactions returned unexpected error: %v", err)
+	}
+	if gotReq == nil {
+		t.Fatal("server never recorded a TransferRequest")
+	}
+	if gotReq.GetSingleTx() != true {
+		t.Errorf("req.SingleTx = %v, want true", gotReq.GetSingleTx())
+	}
+	if len(gotReq.GetRecipients()) != 2 {
+		t.Fatalf("len(req.Recipients) = %d, want 2", len(gotReq.GetRecipients()))
+	}
+	if gotReq.GetRecipients()[0].GetAddress() != "addr-1" || gotReq.GetRecipients()[1].GetAddress() != "addr-2" {
+		t.Errorf("req.Recipients addresses = %q, %q, want %q, %q",
+			gotReq.GetRecipients()[0].GetAddress(), gotReq.GetRecipients()[1].GetAddress(), "addr-1", "addr-2")
+	}
+}
+
 func TestGetCompletedTransactionsByPaymentID_DrainsMultiItemStream(t *testing.T) {
 	startFakeWallet(t, &fakeWalletServer{
 		completedTxns: []*tari_generated.TransactionInfo{
